@@ -7,7 +7,7 @@ from ultralytics import YOLO
 import threading
 
 # Khởi tạo YOLO model
-model = YOLO('./best.pt')
+model = YOLO('../Model/best.pt')
 
 class VideoPlayerApp:
     def __init__(self, root):
