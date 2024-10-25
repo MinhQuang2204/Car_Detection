@@ -47,16 +47,22 @@ class VideoPlayerApp:
         self.control_frame = tk.Frame(self.left_frame, bg="#d3d3d3")
         self.control_frame.pack(side=tk.BOTTOM, pady=10)
 
-        # Nút Play/Pause
-        self.btn_play_pause = tk.Button(self.control_frame, text="Play", command=self.toggle_play_pause)
-        self.btn_play_pause.pack(side=tk.LEFT, padx=10)
+        # Tải ảnh và đặt icon cho các nút
+        self.play_icon = ImageTk.PhotoImage(Image.open("./img/play.png").resize((30, 30), Image.LANCZOS))
+        self.pause_icon = ImageTk.PhotoImage(Image.open("./img/pause.png").resize((30, 30), Image.LANCZOS))
+        self.replay_icon = ImageTk.PhotoImage(Image.open("./img/replay.png").resize((30, 30), Image.LANCZOS))
+        self.select_video_icon = ImageTk.PhotoImage(Image.open("./img/select_video.png").resize((30,30), Image.LANCZOS))
 
+        # Nút Play/Pause
+        self.btn_play_pause = tk.Button(self.control_frame, image=self.play_icon, command=self.toggle_play_pause)
+        self.btn_play_pause.pack(side=tk.LEFT, padx=10)
+        
         # Nút Replay
-        self.btn_replay = tk.Button(self.control_frame, text="Replay", command=self.replay_video)
+        self.btn_replay = tk.Button(self.control_frame, image=self.replay_icon, command=self.replay_video)
         self.btn_replay.pack(side=tk.LEFT, padx=10)
 
         # Nút chọn video
-        self.btn_select = tk.Button(self.control_frame, text="Chọn video", command=self.load_video)
+        self.btn_select = tk.Button(self.control_frame, image=self.select_video_icon, command=self.load_video)
         self.btn_select.pack(side=tk.LEFT, padx=10)
 
         # Đường dẫn video (màu nền xám nhạt)
@@ -88,11 +94,11 @@ class VideoPlayerApp:
     def toggle_play_pause(self):
         if self.paused:
             self.paused = False
-            self.btn_play_pause.config(text="Pause")
+            self.btn_play_pause.config(image=self.pause_icon)
             self.show_frame()
         else:
             self.paused = True
-            self.btn_play_pause.config(text="Play")
+            self.btn_play_pause.config(image=self.play_icon)
 
     def show_frame(self):
         if self.video_playing and not self.paused:
