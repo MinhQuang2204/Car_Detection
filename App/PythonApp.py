@@ -109,68 +109,13 @@ class VideoPlayerApp:
                 image = cv2.imread(self.media_path)
                 self.display_and_detect_image(image)
 
-    def display_and_detect_image(self, image):
-        # Chạy YOLO để phát hiện đối tượng
-        results = model(image)
-        detected_objects = results[0].boxes
-
-        # Dùng font OpenCV cho bounding box
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        # Xóa các widget cũ trong khung cuộn trước khi hiển thị kết quả mới
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-
-        # Vẽ bounding box và chạy OCR trên từng đối tượng được phát hiện
-        for i, box in enumerate(detected_objects):
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            class_id = int(box.cls[0])
-            class_name = model.names[class_id]
-            confidence = box.conf[0]
-
-            # Vẽ bounding box và nhãn độ tin cậy lên ảnh
-            label = f"{class_name} {confidence:.2f}"
-            cv2.putText(image, label, (x1, y1 - 10), font, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
-            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-            # Cắt đối tượng từ ảnh để chạy OCR
-            detected_img = image[y1:y2, x1:x2]
-            detected_img_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
-            
-            # Chạy OCR trên phần cắt ra
-            ocr_results = self.ocr.ocr(detected_img_rgb, cls=True)
-
-            # Tổng hợp các chuỗi OCR từ phần phát hiện thành một chuỗi duy nhất
-            combined_text = ""
-            if ocr_results:
-                for line in ocr_results:
-                    if line:  # Kiểm tra nếu line không phải là None
-                        for box in line:
-                            text = box[1][0]
-                            combined_text += text + " "  # Thêm từng chuỗi vào chuỗi tổng hợp
-
-            # Hiển thị thông tin đối tượng và chuỗi OCR tổng hợp trong khung cuộn
-            detected_img_pil = Image.fromarray(detected_img_rgb)
-            img_detected_tk = ImageTk.PhotoImage(image=detected_img_pil)
-            
-            label_img = tk.Label(self.scrollable_frame, image=img_detected_tk, bg="#d3d3d3")
-            label_img.image = img_detected_tk  # Lưu ảnh để tránh bị xóa
-            label_img.pack(anchor='w', padx=10, pady=5)
-
-            label_info = tk.Label(
-                self.scrollable_frame,
-                text=(f"Đối tượng {i+1}: {class_name} - Độ tin cậy: {confidence:.2f}\nOCR (tổng hợp): {combined_text.strip()}"),
-                anchor='w', 
-                justify='left', 
-                bg="#d3d3d3"
-            )
-            label_info.pack(anchor='w', padx=10, pady=2)
-
+    def update_canvas_image(self, frame):
+        """Cập nhật hình ảnh lên Canvas."""
         # Chuyển đổi từ BGR sang RGB để hiển thị trên Tkinter
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        img_pil = Image.fromarray(image_rgb)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(frame_rgb)
 
-        # Resize ảnh để vừa với canvas
+        # Tính toán tỷ lệ và vị trí để hiển thị đúng trên Canvas
         canvas_width = self.canvas_video.winfo_width()
         canvas_height = self.canvas_video.winfo_height()
         img_width, img_height = img_pil.size
@@ -190,6 +135,97 @@ class VideoPlayerApp:
 
         # Lưu ảnh để tránh bị xóa
         self.video_images.append(img_tk)
+
+    def get_best_detections(self, boxes, image):
+        """
+        Duyệt qua các bounding box và chỉ giữ lại phát hiện có độ tin cậy cao nhất cho mỗi đối tượng.
+        Args:
+            boxes: Các bounding box phát hiện được từ YOLO.
+            image: Ảnh gốc để cắt các đối tượng phát hiện.
+        Returns:
+            best_detections: Từ điển chứa thông tin các phát hiện có độ tin cậy cao nhất.
+        """
+        best_detections = {}
+
+        for box in boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            class_id = int(box.cls[0])
+            class_name = model.names[class_id]
+            confidence = box.conf[0]
+
+            # Tạo khóa dựa trên tên lớp và vị trí trung tâm của bounding box để xác định các đối tượng tương tự
+            center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
+            key = (class_name, center_x // 10, center_y // 10)  # Chia tọa độ để giảm độ nhạy
+
+            # Kiểm tra và chỉ lưu phát hiện có độ tin cậy cao nhất cho mỗi đối tượng
+            if key not in best_detections or best_detections[key]['confidence'] < confidence:
+                best_detections[key] = {
+                    'class_name': class_name,
+                    'confidence': confidence,
+                    'coords': (x1, y1, x2, y2),
+                    'image': image[y1:y2, x1:x2]
+                }
+
+        return best_detections
+
+    def preprocess_detected_images(self, detected_boxes, image):
+        """
+        Preprocess các ảnh được cắt ra từ bounding box.
+        Args:
+            detected_boxes: Từ điển chứa thông tin bounding box đã được lọc.
+            image: Ảnh gốc.
+        Returns:
+            processed_images: Danh sách các ảnh đã được xử lý.
+        """
+        processed_images = []
+
+        for key, data in detected_boxes.items():  # Duyệt qua từng mục trong từ điển
+            x1, y1, x2, y2 = data['coords']  # Truy cập tọa độ từ từ điển
+            class_name = data['class_name']
+            confidence = data['confidence']
+            cropped_img = data['image']
+
+            # Phóng to ảnh cắt ra lên 2.0 lần
+            cropped_img_height, cropped_img_width = cropped_img.shape[:2]
+            new_width = int(cropped_img_width * 2.0)
+            new_height = int(cropped_img_height * 2.0)
+
+            # Resize ảnh cắt ra
+            enlarged_img = cv2.resize(cropped_img, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+
+            # Chuẩn hóa pixel về [0, 1] (nếu cần)
+            normalized_img = enlarged_img / 255.0
+
+            # Lưu kết quả đã xử lý
+            processed_images.append({
+                'class_name': class_name,
+                'confidence': confidence,
+                'coords': (x1, y1, x2, y2),
+                'image': enlarged_img  # Ảnh đã phóng to
+            })
+
+        return processed_images
+
+    def display_and_detect_image(self, image):
+        """
+        Hiển thị ảnh và phát hiện đối tượng trong ảnh đã tải.
+        Args:
+            image: Ảnh gốc để phát hiện đối tượng.
+        """
+        # Tạo bản sao của frame gốc
+        original_frame = image.copy()
+
+        # Phát hiện đối tượng và chạy OCR
+        detections = self.process_frame(original_frame)
+
+        # Vẽ bounding box, label, và OCR text lên ảnh
+        processed_frame = self.draw_detections(image, detections)
+
+        # Hiển thị các ảnh cắt ra trong khung cuộn
+        self.display_detected_images(detections)
+
+        # Cập nhật ảnh đã xử lý lên Canvas
+        self.update_canvas_image(processed_frame)
 
 
     def run_yolo_on_image(self, image):
@@ -230,96 +266,140 @@ class VideoPlayerApp:
             self.paused = True
             self.btn_play_pause.config(image=self.play_icon)
 
+    def process_frame(self, frame):
+        """
+        Phát hiện đối tượng và chạy OCR trên frame gốc.
+        Args:
+            frame: Frame gốc từ video.
+        Returns:
+            detections: Danh sách thông tin phát hiện (bounding box, class, confidence, OCR text).
+        """
+        results = model(frame)  # YOLO detection
+        best_detections = self.get_best_detections(results[0].boxes, frame)
+
+        # Xử lý OCR cho từng vùng được cắt
+        for key, data in best_detections.items():
+            cropped_img = data['image']
+            ocr_results = self.ocr.ocr(cropped_img, cls=True)
+            ocr_text = self.extract_ocr_text(ocr_results)  # Lấy văn bản OCR
+
+            # Thêm văn bản OCR vào phát hiện
+            best_detections[key]['ocr_text'] = ocr_text
+
+        return best_detections
+    
+    def draw_detections(self, frame, detections):
+        """
+        Vẽ bounding box, label, và OCR text lên frame.
+        Args:
+            frame: Ảnh gốc.
+            detections: Thông tin phát hiện từ YOLO và OCR.
+        Returns:
+            frame: Ảnh đã được vẽ.
+        """
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        font_thickness = 1
+
+        for key, data in detections.items():
+            x1, y1, x2, y2 = data['coords']
+            class_name = data['class_name']
+            confidence = data['confidence']
+            ocr_text = data.get('ocr_text', '')
+
+            # Vẽ bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Hiển thị nhãn (class name và confidence) ngay trên bounding box
+            label = f"{class_name} {confidence:.2f}"
+            label_position = (x1, max(0, y1 - 10))  # Phía trên bounding box
+            cv2.putText(frame, label, label_position, font, font_scale, (0, 255, 0), font_thickness, cv2.LINE_AA)
+
+            # Hiển thị văn bản OCR ngay bên trong bounding box, dưới nhãn
+            ocr_position = (x1 + 5, min(y1 + 20, y2 - 10))  # Bên trong bounding box, cách trên 20px
+            cv2.putText(frame, f"OCR: {ocr_text.strip()}", ocr_position, font, font_scale, (0, 255, 0), font_thickness, cv2.LINE_AA)
+
+        return frame
+    
+    def display_detected_images(self, detections):
+        """
+        Hiển thị các ảnh đối tượng được cắt ra trong khung cuộn.
+        Args:
+            detections: Thông tin phát hiện đối tượng (bounding box, ảnh, OCR).
+        """
+        # Xóa các widget cũ trong khung cuộn
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        # Hiển thị các ảnh cắt ra và thông tin OCR
+        self.detected_images = []
+        for key, data in detections.items():
+            detected_img = data['image']  # Ảnh đã cắt
+            detected_img_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)  # Chuyển sang RGB
+            img_detected = Image.fromarray(detected_img_rgb)  # Chuyển sang định dạng PIL
+            img_detected_tk = ImageTk.PhotoImage(image=img_detected)  # Chuyển sang định dạng Tkinter
+
+            # Lưu tham chiếu để tránh bị xóa
+            self.detected_images.append(img_detected_tk)
+
+            # Hiển thị ảnh trong khung cuộn
+            label_img = tk.Label(self.scrollable_frame, image=img_detected_tk, bg="#d3d3d3")
+            label_img.image = img_detected_tk
+            label_img.pack(anchor='w', padx=10, pady=5)
+
+            # Hiển thị thông tin OCR
+            ocr_text = data.get('ocr_text', '')
+            label_info = tk.Label(
+                self.scrollable_frame,
+                text=f"Đối tượng: {data['class_name']} - Độ tin cậy: {data['confidence']:.2f}\nOCR: {ocr_text}",
+                bg="#d3d3d3",
+                wraplength=500,
+                justify="left"
+            )
+            label_info.pack(anchor='w', padx=10, pady=2)
+    
+    def extract_ocr_text(self, ocr_results):
+        """
+        Trích xuất văn bản OCR từ kết quả PaddleOCR.
+        Args:
+            ocr_results: Kết quả OCR từ PaddleOCR.
+        Returns:
+            ocr_text: Văn bản đã được trích xuất (chuỗi).
+        """
+        ocr_text = ""
+        if ocr_results:  # Kiểm tra nếu kết quả OCR không rỗng
+            for line in ocr_results:
+                if line:  # Kiểm tra nếu line không phải là None
+                    for box in line:
+                        text, conf = box[1][0], box[1][1]
+                        if conf > 0.8:  # Lọc kết quả có độ tin cậy cao
+                            ocr_text += text + " "
+        return ocr_text.strip()  # Trả về chuỗi văn bản OCR đã được trích xuất
+
+
     def show_frame(self):
         if self.video_playing() and not self.paused:
             ret, frame = self.video_cap.read()
             if ret:
-                self.current_frame = frame
-                results = model(frame)  # Phát hiện đối tượng trên frame
+                # Tạo bản sao của frame gốc để cắt ảnh
+                original_frame = frame.copy()
 
-                # Dùng font OpenCV cho bounding box
-                font = cv2.FONT_HERSHEY_SIMPLEX
+                # Phát hiện đối tượng và chạy OCR
+                detections = self.process_frame(original_frame)  # Phát hiện đối tượng trên frame gốc
 
-                # Xóa các widget cũ trong khung cuộn trước khi hiển thị kết quả mới
-                for widget in self.scrollable_frame.winfo_children():
-                    widget.destroy()
+                # Cập nhật hình ảnh đã vẽ lên Canvas
+                processed_frame = self.draw_detections(frame, detections)  # Vẽ bounding box, nhãn, OCR
 
-                # Duyệt qua từng đối tượng được phát hiện và xử lý OCR
-                for i, box in enumerate(results[0].boxes):
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    class_id = int(box.cls[0])
-                    class_name = model.names[class_id]
-                    confidence = box.conf[0]
+                # Hiển thị hình ảnh lên Canvas
+                self.update_canvas_image(processed_frame)
 
-                    # Vẽ bounding box và nhãn độ tin cậy lên frame gốc
-                    label = f"{class_name} {confidence:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), font, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                # Hiển thị các ảnh cắt ra trong khung cuộn
+                self.display_detected_images(detections)
 
-                    # Cắt đối tượng từ frame để chạy OCR
-                    detected_img = frame[y1:y2, x1:x2]
-                    detected_img_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
-                    ocr_results = self.ocr.ocr(detected_img_rgb, cls=True)  # Chạy OCR trên từng phần cắt ra
-
-                    # Kiểm tra kết quả OCR
-                    ocr_text = ""
-                    if ocr_results:  # Kiểm tra nếu ocr_results không phải là None
-                        for line in ocr_results:
-                            if line:  # Kiểm tra nếu line không phải là None
-                                for box in line:
-                                    text, confidence = box[1][0], box[1][1]
-                                    if confidence > 0.8:
-                                        ocr_text += text + " "
-
-                    # Hiển thị ảnh đối tượng đã được cắt trong khung cuộn
-                    img_detected = Image.fromarray(detected_img_rgb)
-                    img_detected_tk = ImageTk.PhotoImage(image=img_detected)
-                    
-                    label_img = tk.Label(self.scrollable_frame, image=img_detected_tk, bg="#d3d3d3")
-                    label_img.image = img_detected_tk  # Lưu ảnh để tránh bị xóa
-                    label_img.pack(anchor='w', padx=10, pady=5)
-
-                    # Hiển thị thông tin đối tượng và OCR dưới dạng văn bản chung
-                    label_info = tk.Label(
-                        self.scrollable_frame,
-                        text=f"Đối tượng: {class_name} - Độ tin cậy: {confidence:.2f}\nOCR: {ocr_text.strip()}",
-                        bg="#d3d3d3",
-                        wraplength=500,
-                        justify="left"
-                    )
-                    label_info.pack(anchor='w', padx=10, pady=2)
-
-                # Phần còn lại của mã show_frame không thay đổi
-                # ...
-                # Hiển thị frame đã được phát hiện đối tượng lên Canvas
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(frame_rgb)
-
-                # Tính toán tỷ lệ và vị trí để hiển thị đúng trên canvas
-                canvas_width = self.canvas_video.winfo_width()
-                canvas_height = self.canvas_video.winfo_height()
-                frame_width, frame_height = img.size
-                scale = min(canvas_width / frame_width, canvas_height / frame_height)
-                new_width = int(frame_width * scale)
-                new_height = int(frame_height * scale)
-                img_resized = img.resize((new_width, new_height), Image.LANCZOS)
-                img_tk = ImageTk.PhotoImage(image=img_resized)
-
-                if hasattr(self, 'canvas_image_id'):
-                    self.canvas_video.itemconfig(self.canvas_image_id, image=img_tk)
-                else:
-                    x_offset = (canvas_width - new_width) // 2
-                    y_offset = (canvas_height - new_height) // 2
-                    self.canvas_image_id = self.canvas_video.create_image(x_offset, y_offset, anchor=tk.NW, image=img_tk)
-
-                self.video_images.append(img_tk)
-                self.root.update()
-
-                # Gọi lại show_frame sau một khoảng thời gian frame_delay
+                # Tiếp tục hiển thị frame tiếp theo sau khoảng delay
                 self.root.after(self.frame_delay, self.show_frame)
-            
             else:
-                # Nếu đã đến cuối video, phát lại từ đầu nếu replay_flag được đặt
+                # Xử lý khi video kết thúc
                 if self.replay_flag:
                     self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     self.show_frame()
@@ -353,21 +433,21 @@ class VideoPlayerApp:
             ), anchor='w', justify='left', bg="#d3d3d3")
             label_info.pack(anchor='w', padx=10, pady=2)
 
-        # Chạy OCR trên frame để phát hiện văn bản # thêm vào
-        ocr_results = self.ocr.ocr(frame, cls=True)  # thêm vào
+        # Chạy OCR trên frame để phát hiện văn bản 
+        ocr_results = self.ocr.ocr(frame, cls=True)  
 
-        # Xử lý kết quả OCR và hiển thị thông tin lên khung cuộn # thêm vào
-        for line in ocr_results:  # thêm vào
-            for box in line:  # thêm vào
-                text, confidence = box[1][0], box[1][1]  # thêm vào
-                if confidence > 0.8:  # Chỉ hiển thị kết quả có độ tin cậy cao # thêm vào
-                    # Vẽ bounding box OCR và văn bản lên frame # thêm vào
-                    cv2.rectangle(frame, tuple(box[0][0]), tuple(box[0][2]), (0, 255, 255), 2)  # thêm vào
-                    cv2.putText(frame, f"{text} ({confidence:.2f})", tuple(box[0][0]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)  # thêm vào
+        # Xử lý kết quả OCR và hiển thị thông tin lên khung cuộn
+        for line in ocr_results:  
+            for box in line: 
+                text, confidence = box[1][0], box[1][1]
+                if confidence > 0.8:  # Chỉ hiển thị kết quả có độ tin cậy cao
+                    # Vẽ bounding box OCR và văn bản lên frame
+                    cv2.rectangle(frame, tuple(box[0][0]), tuple(box[0][2]), (0, 255, 255), 2)
+                    cv2.putText(frame, f"{text} ({confidence:.2f})", tuple(box[0][0]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2) 
 
-                    # Hiển thị thông tin OCR trong khung cuộn # thêm vào
-                    ocr_label_info = tk.Label(self.scrollable_frame, text=f"OCR: {text} - Độ tin cậy: {confidence:.2f}", bg="#d3d3d3")  # thêm vào
-                    ocr_label_info.pack(anchor='w', padx=10, pady=2)  # thêm vào
+                    # Hiển thị thông tin OCR trong khung cuộn
+                    ocr_label_info = tk.Label(self.scrollable_frame, text=f"OCR: {text} - Độ tin cậy: {confidence:.2f}", bg="#d3d3d3")
+                    ocr_label_info.pack(anchor='w', padx=10, pady=2)  
 
     def replay_video(self):
         if self.video_cap is not None:
