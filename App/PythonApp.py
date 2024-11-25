@@ -1,7 +1,10 @@
 ### Import các thư viện cần thiết
 # import thư viện đồ họa tkinter
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, PhotoImage, Label, Frame, Entry, Button, StringVar, IntVar
+
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
 
 # import thư viên pencv và PIL để phục vụ quá trình xư lý ảnh
 import cv2
@@ -26,39 +29,318 @@ class VideoPlayerApp:
         self.paused = True
         self.replay_flag = False
         self.current_frame = None
-        self.frame_delay = 100  # Điều chỉnh thời gian delay giữa các frame (ms)
-        # Khởi tạo ocr:
-        self.ocr = PaddleOCR(lang='en')
+        self.frame_delay = 40  # Điều chỉnh thời gian delay giữa các frame (ms)
+        self.ocr = PaddleOCR(lang='en')  # Khởi tạo OCR
 
-        # Khung chính
-        self.left_frame = tk.Frame(root, width=300, bg="#d3d3d3")  # Màu xám nhạt
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=10, pady=10)
+        # Thuộc tính video_images lưu trữ các hình ảnh hiển thị trên Canvas
+        self.video_images = []  # Khởi tạo danh sách trống
         
-        self.right_frame = tk.Frame(root, bg="#d3d3d3")  # Màu xám nhạt
+        # Khung chính
+        self.left_frame = ttk.Frame(root, bootstyle="secondary")  # Tăng chiều rộng của left frame
+        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=10, pady=10)
+
+        # Ép kích thước left frame bằng cách thêm label rỗng
+        spacer = tk.Label(self.left_frame, text="", width=35, bg="#d3d3d3") 
+        spacer.pack()
+
+        self.right_frame = ttk.Frame(root)
         self.right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
+        # Tạo nút trên left_frame
+        self.create_left_buttons()
+        
+        # Nội dung mặc định của right_frame
+        self.init_default_content()
+    
+    ####################
+    ###### Giao diện nút bên left frame
+    def create_left_buttons(self):
+        """Tạo các nút bên trái để chuyển đổi tính năng."""
+        button_style = {"bootstyle": "light", "width": 50, "padding": (10, 10)}  # Tăng chiều rộng và padding
+
+        # Nút mặc định cho trang chủ
+        btn_default = ttk.Button(
+            self.left_frame,
+            text="Trang chủ",
+            command=self.init_default_content,
+            **button_style,
+            anchor="w"  # Căn trái nội dung
+        )
+        btn_default.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+
+        # Placeholder cho các nút tính năng khác (sẽ thêm sau)
+        btn_feature_1 = ttk.Button(
+            self.left_frame,
+            text="Tính năng 1",
+            command=self.placeholder_function,
+            **button_style,
+            anchor="w"
+        )
+        btn_feature_1.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+
+        # Nút để chuyển đến giao diện huấn luyện mô hình
+        btn_train = ttk.Button(
+            self.left_frame,
+            text="Train Model",
+            command=self.show_train_frame,
+            **button_style,
+            anchor="w"
+        )
+        btn_train.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+
+        # Nút để hiển thị giao diện "Detect video và ảnh"
+        btn_detect = ttk.Button(
+            self.left_frame,
+            text="Detect video và ảnh",
+            command=self.show_detect_content,
+            **button_style,
+            anchor="w"
+        )
+        btn_detect.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+
+    #######################################
+    ######### nội dung nút, trang mặc định
+    def init_default_content(self):
+        """Khởi tạo nội dung mặc định (hiển thị thông tin)."""
+        self.clear_right_frame()
+
+        # Khung chứa icon và chữ "Trang Chủ"
+        header_frame = ttk.Frame(self.right_frame, bootstyle="secondary")
+        header_frame.pack(pady=(20, 10), anchor="w", padx=100)  # Căn trái toàn bộ khung
+
+        # Icon "Trang Chủ"
+        try:
+            # Mở hình ảnh và thay đổi kích thước
+            image = Image.open("./img/home_icon.png")
+            image_resized = image.resize((30, 30), Image.LANCZOS)  # Kích thước phù hợp với chữ
+            icon_image = ImageTk.PhotoImage(image_resized)
+
+            # Hiển thị icon
+            icon_label = ttk.Label(header_frame, image=icon_image, bootstyle="secondary")
+            icon_label.image = icon_image  # Lưu tham chiếu để tránh bị xóa
+            icon_label.pack(side="left", padx=(0, 10))  # Đặt icon bên trái và cách chữ 10px
+        except Exception as e:
+            print("Không thể tải hình ảnh:", e)
+
+        # Chữ "Trang Chủ"
+        home_label = ttk.Label(header_frame, text="Trang Chủ", font=("Arial", 18, "bold"), bootstyle="secondary")
+        home_label.pack(side="left")
+
+        # Tiêu đề chính
+        title_label = ttk.Label(self.right_frame, text="Tiểu Luận Chuyên Ngành", font=("Arial", 24, "bold"), bootstyle="success")
+        title_label.pack(pady=(20, 10))
+
+        # Phụ đề
+        subtitle_label = ttk.Label(
+            self.right_frame, text="Tìm Hiểu Bài Toán Nhận Diện Biển Số Xe Qua Camera Giao Thông", font=("Arial", 16), bootstyle="secondary"
+        )
+        subtitle_label.pack(pady=(0, 20))
+
+        # Tên giáo viên hướng dẫn
+        advisor_label = ttk.Label(
+            self.right_frame,
+            text="GVHD: TS Nguyễn Thành Sơn",
+            font=("Arial", 14),
+            bootstyle="secondary",
+            anchor="e",  # Căn phải
+            justify="right",  # Chữ căn phải
+        )
+        advisor_label.pack(padx=60, pady=(0, 5), fill="x")  # Thêm khoảng cách lề ngang
+
+        # Dòng "Sinh viên thực hiện:"
+        student_title_label = ttk.Label(
+            self.right_frame,
+            text="Sinh viên thực hiện:",
+            font=("Arial", 14),
+            bootstyle="secondary",
+            anchor="e",  # Căn phải
+            justify="right",
+        )
+        student_title_label.pack(padx=150, pady=(0, 5), fill="x")  # Thêm khoảng cách lề ngang
+
+        # Danh sách sinh viên
+        student_label = ttk.Label(
+            self.right_frame,
+            text="19110457 - Phan Tấn Thành\n20110704 - Trần Minh Quang",
+            font=("Arial", 14),
+            bootstyle="secondary",
+            anchor="e",  # Căn phải
+            justify="right",  # Chữ căn phải
+        )
+        student_label.pack(padx=50, pady=(0, 20), fill="x")  # Thêm khoảng cách lề ngang
+
+        # Footer
+        footer_label = ttk.Label(self.right_frame, text="Made with Tkinter", font=("Arial", 10, "italic"), bootstyle="secondary")
+        footer_label.pack(side="bottom", pady=(0, 10))
+
+    ###########################
+    #### Tạo các button với chức năng
+      
+    def create_left_buttons(self):
+        # Nút mặc định cho trang chủ
+        btn_default = tk.Button(self.left_frame, text="Trang chủ", command=self.init_default_content, bg="#ffffff")
+        btn_default.pack(fill=tk.X, padx=10, pady=5)
+
+        # Placeholder cho các nút tính năng khác (sẽ thêm sau)
+        btn_feature_1 = tk.Button(self.left_frame, text="Tính năng 1", command=self.placeholder_function, bg="#ffffff")
+        btn_feature_1.pack(fill=tk.X, padx=10, pady=5)
+
+        # Nút để chuyển đến giao diện huấn luyện mô hình
+        btn_train = tk.Button(self.left_frame, text="Train Model", command=self.show_train_frame, bg="#ffffff")
+        btn_train.pack(fill=tk.X, padx=10, pady=5)
+
+        # Nút để hiển thị giao diện "Detect video và ảnh"
+        btn_detect = tk.Button(self.left_frame, text="Detect video và ảnh", command=self.show_detect_content, bg="#ffffff")
+        btn_detect.pack(fill=tk.X, padx=10, pady=5)
+
+    ##################################
+    #### Phần mô phỏng quá trình training với tùy chỉnh tham số 
+
+    def show_train_frame(self):
+        """Hiển thị giao diện để huấn luyện mô hình."""
+        self.clear_right_frame()
+
+        ttk.Label(self.right_frame, text="Train Model", font=("Arial", 18, "bold"), bootstyle="danger").pack(pady=20)
+
+        # Đường dẫn đến tập dữ liệu train
+        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu training:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.train_data_path = StringVar()
+        train_entry = ttk.Entry(self.right_frame, textvariable=self.train_data_path, width=100, state="readonly")  # Đặt state="readonly"
+        train_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.right_frame, text="Chọn", command=self.select_train_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+
+        # Đường dẫn đến dữ liệu validation
+        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu validation:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.val_data_path = StringVar()
+        val_entry = ttk.Entry(self.right_frame, textvariable=self.val_data_path, width=100, state="readonly")  # Đặt state="readonly"
+        val_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.right_frame, text="Chọn", command=self.select_val_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+
+        # Đường dẫn đến model
+        ttk.Label(self.right_frame, text="Đường dẫn đến mô hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.model_path = StringVar()
+        model_entry = ttk.Entry(self.right_frame, textvariable=self.model_path, width=100, state="readonly")  # Đặt state="readonly"
+        model_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.right_frame, text="Chọn", command=self.select_model_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+
+        # Batch size
+        ttk.Label(self.right_frame, text="Chọn giá trị Batch size:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.batch_size = IntVar(value=16)
+        batch_size_slider = ttk.Scale(self.right_frame, from_=1, to=128, orient="horizontal", variable=self.batch_size, length=500, bootstyle="danger")
+        batch_size_slider.pack(anchor="w", padx=20, pady=5)
+
+        # Hiển thị giá trị của batch size
+        self.batch_size_label = ttk.Label(self.right_frame, text=f"Batch size: {self.batch_size.get()}", bootstyle="secondary")
+        self.batch_size_label.pack(anchor="w", padx=20, pady=5)
+        batch_size_slider.bind("<Motion>", self.update_batch_size_label)
+
+        # Epochs
+        ttk.Label(self.right_frame, text="Chọn giá trị Số epochs:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.epochs = IntVar(value=120)
+        epochs_slider = ttk.Scale(self.right_frame, from_=1, to=200, orient="horizontal", variable=self.epochs, length=500, bootstyle="success")
+        epochs_slider.pack(anchor="w", padx=20, pady=5)
+
+        # Hiển thị giá trị của epochs
+        self.epochs_label = ttk.Label(self.right_frame, text=f"Số epochs: {self.epochs.get()}", bootstyle="secondary")
+        self.epochs_label.pack(anchor="w", padx=20, pady=5)
+        epochs_slider.bind("<Motion>", self.update_epochs_label)
+
+        # Nút bắt đầu train
+        ttk.Button(
+            self.right_frame,
+            text="Bắt đầu",
+            command=self.start_training,
+            bootstyle="success-outline",
+            width=20,  # Tăng độ rộng của nút
+        ).pack(anchor="w", padx=20, pady=20)  # Căn trái và thêm khoảng cách
+
+    def update_batch_size_label(self, event):
+        """Cập nhật nhãn hiển thị giá trị batch size."""
+        self.batch_size_label.config(text=f"Batch size: {self.batch_size.get()}")
+
+    def update_epochs_label(self, event):
+        """Cập nhật nhãn hiển thị giá trị epochs."""
+        self.epochs_label.config(text=f"Số epochs: {self.epochs.get()}")
+
+    def select_train_path(self):
+        """Chọn đường dẫn dữ liệu training."""
+        path = filedialog.askdirectory()
+        if path:
+            self.train_data_path.set(path)  # Cập nhật giá trị vào hộp nhập
+
+    def select_val_path(self):
+        """Chọn đường dẫn dữ liệu validation."""
+        path = filedialog.askdirectory()
+        if path:
+            self.val_data_path.set(path)  # Cập nhật giá trị vào hộp nhập
+
+    def select_model_path(self):
+        """Chọn đường dẫn mô hình."""
+        path = filedialog.askopenfilename(filetypes=[("Model files", "*.pt;*.pth")])
+        if path:
+            self.model_path.set(path)  # Cập nhật giá trị vào hộp nhập
+
+    def start_training(self):
+        """Hàm xử lý khi nhấn nút bắt đầu train."""
+        train_path = self.train_data_path.get()
+        val_path = self.val_data_path.get()
+        model_path = self.model_path.get()
+        batch_size = self.batch_size.get()
+        epochs = self.epochs.get()
+
+        if not train_path or not val_path or not model_path:
+            tk.messagebox.showerror("Lỗi", "Hãy chọn đầy đủ các đường dẫn cần thiết.")
+            return
+
+        # Hiển thị thông tin cấu hình
+        tk.messagebox.showinfo("Thông tin", f"Đang huấn luyện mô hình từ:\n"
+                                            f"Training path: {train_path}\n"
+                                            f"Validation path: {val_path}\n"
+                                            f"Model path: {model_path}\n"
+                                            f"Batch size: {batch_size}\n"
+                                            f"Epochs: {epochs}")
+
+    
+    ##################################
+    ###### Xóa nội dung right frame khi bấm sang button mới bên khung left frame
+    def clear_right_frame(self):
+        """Xóa toàn bộ nội dung trong khung phải."""
+        for widget in self.right_frame.winfo_children():
+            widget.destroy()
+
+    def placeholder_function(self):
+        """Placeholder cho các nút tính năng khác."""
+        self.clear_right_frame()
+        label = tk.Label(self.right_frame, text="Tính năng này chưa được triển khai.", bg="#d3d3d3")
+        label.pack(expand=True)
+
+    ########################################
+    ####### Phần detect video/ảnh hay demo 
+    def show_detect_content(self):
+        """Hiển thị nội dung hiện tại của Detect video và ảnh."""
+        self.clear_right_frame()
+        
         # Khung chứa nút tìm kiếm và đường dẫn video
-        self.top_controls = tk.Frame(self.right_frame, bg="#d3d3d3")  # Màu xám nhạt
+        self.top_controls = tk.Frame(self.right_frame, bg="#d3d3d3")
         self.top_controls.pack(side=tk.TOP, anchor='w', pady=10)
 
-        # Sửa lại nút chọn media để dùng cho cả ảnh và video
+        # Nút chọn video
         self.select_video_icon = ImageTk.PhotoImage(Image.open("./img/select_video.png").resize((30, 30), Image.LANCZOS))
         self.btn_select = tk.Button(self.top_controls, image=self.select_video_icon, command=self.load_media)
         self.btn_select.pack(side=tk.LEFT, padx=10)
 
-        # Label hiển thị đường dẫn video bên cạnh nút Find
-        self.video_path_label = tk.Label(self.top_controls, text="No video selected", bg="#d3d3d3", anchor='w')
-        self.video_path_label.pack(side=tk.LEFT, padx=10)
+        # Label hiển thị đường dẫn video
+        self.video_path_label = ttk.Label(self.top_controls, text="No video selected", bootstyle="secondary-inverse", anchor="w")  # Đặt màu nền secondary
+        self.video_path_label.pack(side=tk.LEFT, padx=10, pady=5, fill=tk.X, expand=True)
 
-        # Khung video (Canvas) để phát video
+        # Canvas phát video
         self.canvas_video = tk.Canvas(self.right_frame, width=720, height=360, bg="white")
         self.canvas_video.pack(side=tk.TOP, pady=10)
 
-        # Khung chứa nút Play/Pause và Replay
-        self.control_frame = tk.Frame(self.right_frame, bg="#d3d3d3")  # Màu xám nhạt
-        self.control_frame.pack(side=tk.TOP, pady=10)
-        
         # Nút Play/Pause và Replay
+        self.control_frame = tk.Frame(self.right_frame, bg="#d3d3d3")
+        self.control_frame.pack(side=tk.TOP, pady=10)
+
         self.play_icon = ImageTk.PhotoImage(Image.open("./img/play.png").resize((30, 30), Image.LANCZOS))
         self.pause_icon = ImageTk.PhotoImage(Image.open("./img/pause.png").resize((30, 30), Image.LANCZOS))
         self.replay_icon = ImageTk.PhotoImage(Image.open("./img/replay.png").resize((30, 30), Image.LANCZOS))
@@ -87,10 +369,6 @@ class VideoPlayerApp:
 
         self.canvas_results.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
-
-        self.video_cap = None
-        self.video_images = []
-        self.detected_images = []
 
     def load_media(self):
         # Hộp thoại chọn media (ảnh hoặc video)
