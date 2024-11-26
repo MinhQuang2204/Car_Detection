@@ -1,21 +1,26 @@
-### Import các thư viện cần thiết
-# import thư viện đồ họa tkinter
+########### Import các thư viện cần thiết
+#### import thư viện đồ họa tkinter
 import tkinter as tk
 from tkinter import filedialog, PhotoImage, Label, Frame, Entry, Button, StringVar, IntVar
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 
-# import thư viên pencv và PIL để phục vụ quá trình xư lý ảnh
+#### import thư viên opencv và PIL để phục vụ quá trình xử lý ảnh
 import cv2
 from PIL import Image, ImageTk
 
-# import thư viện YOLO và paddleocr
+#### import thư viện YOLO và paddleocr
 from ultralytics import YOLO
 from paddleocr import PaddleOCR, draw_ocr
 
-# Xử lý thread
+#### Xử lý thread
 import threading
+
+#### Các thư viện khác
+import os
+import pandas as pd
+import yaml
 
 ### Khởi tạo YOLO model
 model = YOLO('../Model/Models_yolov10n_dataBienSoNhieuLoaiv4_datanoscale_anhmau1nhan/runs/detect/train/weights/best.pt')
@@ -39,10 +44,6 @@ class VideoPlayerApp:
         self.left_frame = ttk.Frame(root, bootstyle="secondary")  # Tăng chiều rộng của left frame
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=10, pady=10)
 
-        # Ép kích thước left frame bằng cách thêm label rỗng
-        spacer = tk.Label(self.left_frame, text="", width=35, bg="#d3d3d3") 
-        spacer.pack()
-
         self.right_frame = ttk.Frame(root)
         self.right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
@@ -53,50 +54,55 @@ class VideoPlayerApp:
         self.init_default_content()
     
     ####################
-    ###### Giao diện nút bên left frame
+    ###### Giao diện nút bên left frame, tạo button với các chức năng
     def create_left_buttons(self):
         """Tạo các nút bên trái để chuyển đổi tính năng."""
-        button_style = {"bootstyle": "light", "width": 50, "padding": (10, 10)}  # Tăng chiều rộng và padding
+        button_style = {"bootstyle": "light", "width": 20, "padding": (10, 10)}  # Tăng chiều rộng và padding
 
         # Nút mặc định cho trang chủ
         btn_default = ttk.Button(
             self.left_frame,
             text="Trang chủ",
             command=self.init_default_content,
-            **button_style,
-            anchor="w"  # Căn trái nội dung
+            **button_style
         )
-        btn_default.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+        btn_default.pack(fill=tk.X, padx=10, pady=10)
 
         # Placeholder cho các nút tính năng khác (sẽ thêm sau)
         btn_feature_1 = ttk.Button(
             self.left_frame,
             text="Tính năng 1",
             command=self.placeholder_function,
-            **button_style,
-            anchor="w"
+            **button_style
         )
-        btn_feature_1.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+        btn_feature_1.pack(fill=tk.X, padx=10, pady=10)
 
         # Nút để chuyển đến giao diện huấn luyện mô hình
         btn_train = ttk.Button(
             self.left_frame,
             text="Train Model",
             command=self.show_train_frame,
-            **button_style,
-            anchor="w"
+            **button_style
         )
-        btn_train.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+        btn_train.pack(fill=tk.X, padx=10, pady=10)
+
+        # Nút "Kết quả mô hình"
+        btn_results = ttk.Button(
+            self.left_frame,
+            text="Kết quả mô hình",
+            command=self.show_model_results,
+            **button_style
+        )
+        btn_results.pack(fill=tk.X, padx=10, pady=10)
 
         # Nút để hiển thị giao diện "Detect video và ảnh"
         btn_detect = ttk.Button(
             self.left_frame,
             text="Detect video và ảnh",
             command=self.show_detect_content,
-            **button_style,
-            anchor="w"
+            **button_style
         )
-        btn_detect.pack(fill=tk.X, padx=10, pady=10, anchor="w")  # Căn trái nút
+        btn_detect.pack(fill=tk.X, padx=10, pady=10)
 
     #######################################
     ######### nội dung nút, trang mặc định
@@ -176,22 +182,22 @@ class VideoPlayerApp:
     ###########################
     #### Tạo các button với chức năng
       
-    def create_left_buttons(self):
-        # Nút mặc định cho trang chủ
-        btn_default = tk.Button(self.left_frame, text="Trang chủ", command=self.init_default_content, bg="#ffffff")
-        btn_default.pack(fill=tk.X, padx=10, pady=5)
+    # def create_left_buttons(self):
+    #     # Nút mặc định cho trang chủ
+    #     btn_default = tk.Button(self.left_frame, text="Trang chủ", command=self.init_default_content, bg="#ffffff")
+    #     btn_default.pack(fill=tk.X, padx=10, pady=5)
 
-        # Placeholder cho các nút tính năng khác (sẽ thêm sau)
-        btn_feature_1 = tk.Button(self.left_frame, text="Tính năng 1", command=self.placeholder_function, bg="#ffffff")
-        btn_feature_1.pack(fill=tk.X, padx=10, pady=5)
+    #     # Placeholder cho các nút tính năng khác (sẽ thêm sau)
+    #     btn_feature_1 = tk.Button(self.left_frame, text="Tính năng 1", command=self.placeholder_function, bg="#ffffff")
+    #     btn_feature_1.pack(fill=tk.X, padx=10, pady=5)
 
-        # Nút để chuyển đến giao diện huấn luyện mô hình
-        btn_train = tk.Button(self.left_frame, text="Train Model", command=self.show_train_frame, bg="#ffffff")
-        btn_train.pack(fill=tk.X, padx=10, pady=5)
+    #     # Nút để chuyển đến giao diện huấn luyện mô hình
+    #     btn_train = tk.Button(self.left_frame, text="Train Model", command=self.show_train_frame, bg="#ffffff")
+    #     btn_train.pack(fill=tk.X, padx=10, pady=5)
 
-        # Nút để hiển thị giao diện "Detect video và ảnh"
-        btn_detect = tk.Button(self.left_frame, text="Detect video và ảnh", command=self.show_detect_content, bg="#ffffff")
-        btn_detect.pack(fill=tk.X, padx=10, pady=5)
+    #     # Nút để hiển thị giao diện "Detect video và ảnh"
+    #     btn_detect = tk.Button(self.left_frame, text="Detect video và ảnh", command=self.show_detect_content, bg="#ffffff")
+    #     btn_detect.pack(fill=tk.X, padx=10, pady=5)
 
     ##################################
     #### Phần mô phỏng quá trình training với tùy chỉnh tham số 
@@ -300,7 +306,120 @@ class VideoPlayerApp:
                                             f"Batch size: {batch_size}\n"
                                             f"Epochs: {epochs}")
 
-    
+    ###################################
+    ##### Phần hiển thị các thông số đánh giá của mô hình
+    def show_model_results(self):
+        """Hiển thị giao diện chọn thư mục và kết quả mô hình."""
+        self.clear_right_frame()
+
+        # Tạo khung chọn thư mục
+        self.selection_frame = ttk.Frame(self.right_frame,)
+        self.selection_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        # Tiêu đề
+        ttk.Label(self.selection_frame, text="Kết quả mô hình", font=("Arial", 18, "bold"), bootstyle="danger").pack(pady=20)
+        
+        # Chọn đường dẫn thư mục
+        ttk.Label(self.selection_frame, text="Chọn thư mục chứa mô hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.model_dir_path = StringVar()
+        model_dir_entry = ttk.Entry(self.selection_frame, textvariable=self.model_dir_path, width=150, state="readonly")
+        model_dir_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.selection_frame, text="Chọn", command=self.select_model_dir, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+
+        # Tạo khung hiển thị kết quả
+        self.result_frame = ttk.Frame(self.right_frame,)
+        self.result_frame.pack(fill=tk.X, padx=20, pady=10)
+
+    def clear_results(self):
+        """Xóa nội dung hiển thị kết quả trong result_frame."""
+        for widget in self.result_frame.winfo_children():
+            widget.destroy()
+
+    def select_model_dir(self):
+        """Chọn thư mục chứa mô hình và hiển thị kết quả nếu tìm được file."""
+        base_path = filedialog.askdirectory()
+        if base_path:
+            # Ghép thêm /runs/detect/train
+            model_dir = os.path.join(base_path, "runs", "detect", "train")
+
+            # Kiểm tra thư mục có tồn tại không
+            if not os.path.exists(model_dir):
+                self.clear_results()
+                ttk.Label(self.result_frame, text="Thư mục không tồn tại.", bootstyle="danger").pack(pady=10)
+                return
+
+            # Cập nhật đường dẫn và tính toán kết quả
+            self.model_dir_path.set(model_dir)
+            self.calculate_results()
+
+    def calculate_results(self):
+        """Tính toán kết quả từ các file trong thư mục và hiển thị."""
+        model_dir = self.model_dir_path.get()
+
+        # Tìm file cần thiết
+        results_file = os.path.join(model_dir, 'results.csv')
+        args_file = os.path.join(model_dir, 'args.yaml')
+        best_model_file = os.path.join(model_dir, 'weights', 'best.pt')
+
+        if not os.path.exists(results_file) or not os.path.exists(args_file):
+            self.clear_results()
+            ttk.Label(self.result_frame, text="Không tìm thấy file results.csv hoặc args.yaml.", bootstyle="danger").pack(pady=10)
+            return
+
+        # Đọc file results.csv
+        try:
+            data = pd.read_csv(results_file)
+        except Exception as e:
+            self.clear_results()
+            ttk.Label(self.result_frame, text=f"Lỗi khi đọc file results.csv: {e}", bootstyle="danger").pack(pady=10)
+            return
+
+        # Tính toán train_loss, val_loss, object_accuracy
+        data['train_loss'] = data['train/box_loss'] + data['train/cls_loss'] + data['train/dfl_loss']
+        data['val_loss'] = data['val/box_loss'] + data['val/cls_loss'] + data['val/dfl_loss']
+        data['object_accuracy'] = 2 * (data['metrics/precision(B)'] * data['metrics/recall(B)']) / (
+            data['metrics/precision(B)'] + data['metrics/recall(B)']
+        )
+        data['object_accuracy'] = data['object_accuracy'].fillna(0)  # Xử lý chia cho 0
+
+        # Tính fitness
+        data['fitness'] = (0.1 * data['metrics/mAP50(B)'] + 0.9 * data['metrics/mAP50-95(B)'])
+        best_epoch = data.loc[data['fitness'].idxmax()]
+
+        # Chỉ lấy thời gian tại dòng tốt nhất
+        best_time_seconds = best_epoch['time']
+        hours, remainder = divmod(best_time_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        formatted_time = f"{int(hours)}:{int(minutes):02d}:{int(seconds):02d}"
+
+        # Đọc args.yaml
+        try:
+            with open(args_file, 'r') as file:
+                args_data = yaml.safe_load(file)
+            batch_size = args_data.get('batch', 'Không xác định')
+        except Exception as e:
+            self.clear_results()
+            ttk.Label(self.result_frame, text=f"Lỗi khi đọc file args.yaml: {e}", bootstyle="danger").pack(pady=10)
+            return
+
+        # Xóa kết quả cũ trước khi hiển thị kết quả mới
+        self.clear_results()
+
+        # Hiển thị kết quả trong result_frame
+        ttk.Label(self.result_frame, text="Kết quả mô hình sau khi huấn luyện:", font=("Arial", 18, "bold"), bootstyle="success").pack(anchor="w", pady=10)
+        result_text = (
+            #f"Đường dẫn mô hình: {model_dir}\n"
+            f"Số Epochs: {int(best_epoch['epoch'])}\n"
+            f"Thời gian huấn luyện tại epoch tốt nhất: {formatted_time}\n"
+            f"Train Loss: {best_epoch['train_loss']:.4f}\n"
+            f"Validation Loss: {best_epoch['val_loss']:.4f}\n"
+            f"Object Accuracy: {best_epoch['object_accuracy']:.4f}\n"
+            f"mAP@0.5: {best_epoch['metrics/mAP50(B)']:.4f}\n"
+            f"mAP@0.5:0.95: {best_epoch['metrics/mAP50-95(B)']:.4f}\n"
+            f"Kích thước batch: {batch_size}"
+        )
+        ttk.Label(self.result_frame, text=result_text, font=('Arial', 14), justify="left", bootstyle="secondary").pack(anchor="w", pady=10)
+
     ##################################
     ###### Xóa nội dung right frame khi bấm sang button mới bên khung left frame
     def clear_right_frame(self):
