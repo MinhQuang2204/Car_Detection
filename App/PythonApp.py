@@ -16,14 +16,47 @@ from paddleocr import PaddleOCR, draw_ocr
 
 #### Xử lý thread
 import threading
+import multiprocessing
 
 #### Các thư viện khác
 import os
 import pandas as pd
 import yaml
 
+# Thư viện xử lý toán học và mảng
+import numpy as np
+import torch
+
+# Thư viện hỗ trợ các phép tính và đọc dữ liệu
+from torchvision.ops import box_iou
+
 ### Khởi tạo YOLO model
-model = YOLO('../Model/Models_yolov10n_dataBienSoNhieuLoaiv4_datanoscale_anhmau1nhan/runs/detect/train/weights/best.pt')
+#model = YOLO('../Model/Models_yolov10n_dataBienSoNhieuLoaiv4_datanoscale_anhmau1nhan/runs/detect/train/weights/best.pt')
+
+def run_val_process(model_path, yaml_file_path, queue):
+        """
+        Hàm thực hiện YOLO model.val() trong một process riêng.
+        Args:
+            model_path (str): Đường dẫn đến mô hình YOLO.
+            yaml_file_path (str): Đường dẫn đến tệp .yaml.
+            queue (multiprocessing.Queue): Hàng đợi để truyền kết quả.
+        """
+        from ultralytics import YOLO  # Import YOLO trong process con
+        import os
+
+        try:
+            # Load YOLO model
+            model = YOLO(model_path)
+
+            # Thực hiện val
+            results = model.val(data=yaml_file_path, save_json=True)
+            mAP_50 = results.box.map50
+            mAP_50_95 = results.box.map
+
+            # Gửi kết quả qua queue
+            queue.put((mAP_50, mAP_50_95))
+        except Exception as e:
+            queue.put(f"Lỗi: {e}")
 
 class VideoPlayerApp:
     def __init__(self, root):
@@ -35,7 +68,7 @@ class VideoPlayerApp:
         self.replay_flag = False
         self.current_frame = None
         self.frame_delay = 40  # Điều chỉnh thời gian delay giữa các frame (ms)
-        self.ocr = PaddleOCR(lang='en')  # Khởi tạo OCR
+        self.ocr = None #PaddleOCR(lang='en')  # Khởi tạo OCR
 
         # Thuộc tính video_images lưu trữ các hình ảnh hiển thị trên Canvas
         self.video_images = []  # Khởi tạo danh sách trống
@@ -68,14 +101,14 @@ class VideoPlayerApp:
         )
         btn_default.pack(fill=tk.X, padx=10, pady=10)
 
-        # Placeholder cho các nút tính năng khác (sẽ thêm sau)
-        btn_feature_1 = ttk.Button(
-            self.left_frame,
-            text="Tính năng 1",
-            command=self.placeholder_function,
-            **button_style
-        )
-        btn_feature_1.pack(fill=tk.X, padx=10, pady=10)
+        # # Placeholder cho các nút tính năng khác (sẽ thêm sau)
+        # btn_feature_1 = ttk.Button(
+        #     self.left_frame,
+        #     text="Tính năng 1",
+        #     command=self.placeholder_function,
+        #     **button_style
+        # )
+        # btn_feature_1.pack(fill=tk.X, padx=10, pady=10)
 
         # Nút để chuyển đến giao diện huấn luyện mô hình
         btn_train = ttk.Button(
@@ -94,6 +127,15 @@ class VideoPlayerApp:
             **button_style
         )
         btn_results.pack(fill=tk.X, padx=10, pady=10)
+
+        # Nút để chuyển đến giao diện test mô hình
+        btn_test = ttk.Button(
+            self.left_frame,
+            text="Test Model",
+            command=self.show_test_frame,
+            **button_style
+        )
+        btn_test.pack(fill=tk.X, padx=10, pady=10)
 
         # Nút để hiển thị giao diện "Detect video và ảnh"
         btn_detect = ttk.Button(
@@ -420,6 +462,243 @@ class VideoPlayerApp:
         )
         ttk.Label(self.result_frame, text=result_text, font=('Arial', 14), justify="left", bootstyle="secondary").pack(anchor="w", pady=10)
 
+    ############################################
+    ###### Test mô hình trên các tập dữ liệu test
+
+    def show_test_frame(self):
+        """Hiển thị giao diện để test mô hình."""
+        self.clear_right_frame()
+
+        ttk.Label(self.right_frame, text="Test Mô Hình", font=("Arial", 18, "bold"), bootstyle="danger").pack(pady=20)
+
+        # Phần chọn mô hình
+        ttk.Label(self.right_frame, text="Chọn Mô Hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.custom_model_path = StringVar()  # Lưu đường dẫn mô hình được chọn
+        ttk.Entry(self.right_frame, textvariable=self.custom_model_path, width=100, state="readonly").pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.right_frame, text="Chọn Mô Hình", command=self.select_custom_model, bootstyle="primary").pack(anchor="w", padx=20, pady=10)
+
+        # Phần chọn tệp data.yaml
+        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu test (.yaml):", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.yaml_file_path = StringVar()
+        ttk.Entry(self.right_frame, textvariable=self.yaml_file_path, width=100, state="readonly").pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.right_frame, text="Chọn", command=self.select_yaml_file, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+
+        # Nút bắt đầu test
+        ttk.Button(
+            self.right_frame,
+            text="Bắt đầu Test",
+            command=self.start_testing,
+            bootstyle="success-outline",
+            width=20
+        ).pack(anchor="w", padx=20, pady=20)
+
+        # Kết quả hiển thị
+        self.result_frame = ttk.Frame(self.right_frame)
+        self.result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+    def select_custom_model(self):
+        """Xử lý khi người dùng chọn một mô hình YOLO mới."""
+        file_path = filedialog.askopenfilename(filetypes=[("YOLO Model Files", "*.pt")])  # Chỉ cho phép chọn tệp .pt
+        if file_path:
+            self.custom_model_path.set(file_path)  # Lưu đường dẫn mô hình vào biến
+            try:
+                # Tải mô hình YOLO mới
+                self.custom_model = YOLO(file_path)
+                tk.messagebox.showinfo("Thông báo", "Mô hình đã được tải thành công!")
+            except Exception as e:
+                tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
+                self.custom_model = None  # Đặt về None nếu tải mô hình thất bại
+
+    def select_yaml_file(self):
+        """Mở hộp thoại để chọn tệp data.yaml."""
+        file_path = filedialog.askopenfilename(filetypes=[("YAML files", "*.yaml")])
+        if file_path:
+            self.yaml_file_path.set(file_path)  # Lưu đường dẫn tệp đã chọn  
+
+    def get_test_paths(self, yaml_file_path):
+        """Lấy đường dẫn tới tập ảnh và nhãn test."""
+        base_path = os.path.dirname(yaml_file_path)
+        images_path = os.path.join(base_path, "test/images")
+        labels_path = os.path.join(base_path, "test/labels")
+
+        print("IMAGE PATH:", images_path)
+        print("LABELS PATH:", labels_path)
+
+        return {'images': images_path, 'labels': labels_path}   
+
+    def read_ground_truth_boxes(self, yaml_file_path):
+        """Đọc các bounding box từ nhãn ground truth."""
+        test_paths = self.get_test_paths(yaml_file_path)
+        labels_path = test_paths['labels']
+        images_path = test_paths['images']
+
+        ground_truth_boxes = {}
+        for label_file in os.listdir(labels_path):
+            if not label_file.endswith('.txt'):
+                continue
+
+            image_name = label_file.replace('.txt', '.jpg')
+            image_path = os.path.join(images_path, image_name)
+
+            if not os.path.exists(image_path):
+                print(f"Image {image_name} not found, skipping.")
+                continue
+
+            with Image.open(image_path) as img:
+                image_width, image_height = img.size
+
+            boxes = []
+            with open(os.path.join(labels_path, label_file), 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    _, x_center, y_center, width, height = map(float, parts)
+
+                    # Chuyển đổi từ định dạng YOLO sang [x1, y1, x2, y2]
+                    x1 = (x_center - width / 2) * image_width
+                    y1 = (y_center - height / 2) * image_height
+                    x2 = (x_center + width / 2) * image_width
+                    y2 = (y_center + height / 2) * image_height
+
+                    boxes.append([x1, y1, x2, y2])
+
+            ground_truth_boxes[image_name] = boxes
+
+        return ground_truth_boxes
+    
+    def get_predictions_from_test_set(self, yaml_file_path):
+        """Lấy bounding box dự đoán từ mô hình YOLO."""
+        test_paths = self.get_test_paths(yaml_file_path)
+        images_path = test_paths['images']
+
+        predictions = {}
+        results = self.custom_model.predict(source=images_path, save=False)
+
+        for result in results:
+            image_name = os.path.basename(result.path)
+            boxes = result.boxes.xyxy.cpu().numpy()
+            confidences = result.boxes.conf.cpu().numpy()
+
+            predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
+
+        return predictions
+    
+    def calculate_miou(self, predictions, ground_truth_boxes):
+        """Tính mIoU giữa dự đoán và ground truth."""
+        ious = []
+
+        for image_name, gt_boxes in ground_truth_boxes.items():
+            pred_boxes = predictions.get(image_name, {}).get('boxes', [])
+            if len(pred_boxes) > 0 and len(gt_boxes) > 0:
+                iou_matrix = box_iou(torch.tensor(pred_boxes), torch.tensor(gt_boxes))
+                max_ious = iou_matrix.max(dim=1).values.numpy()
+                ious.extend(max_ious)
+
+        return np.mean(ious) if ious else 0
+
+    def calculate_plate_detection_accuracy(self, predictions, ground_truth_boxes, iou_threshold=0.5):
+        """Tính tỷ lệ nhận diện biển số dựa trên các khung dự đoán và nhãn ground truth."""
+        correct_detections = 0
+        total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
+
+        for image_name, gt_boxes in ground_truth_boxes.items():
+            pred_boxes = predictions.get(image_name, {}).get('boxes', [])
+            if len(pred_boxes) > 0:
+                iou_matrix = box_iou(torch.tensor(pred_boxes), torch.tensor(gt_boxes))
+                max_ious = iou_matrix.max(dim=0).values.numpy()
+                correct_detections += sum(iou >= iou_threshold for iou in max_ious)
+
+        return (correct_detections / total_plates) * 100 if total_plates > 0 else 0
+
+    def calculate_average_confidence(self, predictions):
+        """
+        Tính độ tin cậy trung bình từ các bounding box dự đoán.
+        """
+        confidences = []
+        for data in predictions.values():
+            confidences.extend(data.get('confidences', []))
+        return np.mean(confidences) if confidences else 0
+
+    def start_testing(self):
+        """Bắt đầu kiểm tra mô hình."""
+        yaml_file_path = self.yaml_file_path.get()
+
+        if not yaml_file_path:
+            tk.messagebox.showerror("Lỗi", "Hãy chọn tệp 'data.yaml'.")
+            return
+
+        # Đóng băng giao diện
+        self.disable_buttons()
+        self.run_testing(yaml_file_path)
+    
+    def run_testing(self, yaml_file_path):
+        """
+        Thực hiện kiểm tra mô hình, tính các thông số mAP, mIoU, độ tin cậy trung bình, và tỷ lệ nhận diện biển số.
+        """
+        try:
+            # Kiểm tra tệp YAML
+            if not os.path.exists(yaml_file_path):
+                tk.messagebox.showerror("Lỗi", f"Không tìm thấy tệp 'data.yaml' tại: {yaml_file_path}")
+                self.enable_buttons()
+                return
+
+            # Kiểm tra nếu mô hình chưa được chọn
+            if not hasattr(self, 'custom_model') or self.custom_model is None:
+                tk.messagebox.showerror("Lỗi", "Mô hình chưa được chọn. Vui lòng chọn một mô hình trước khi tiếp tục.")
+                self.enable_buttons()
+                return
+
+            # Tính mAP bằng model.val()
+            results = self.custom_model.val(data=yaml_file_path, save_json=True)
+            mAP_50 = results.box.map50
+            mAP_50_95 = results.box.map
+
+            # Đọc ground truth và dự đoán
+            ground_truth_boxes = self.read_ground_truth_boxes(yaml_file_path)
+            predictions = self.get_predictions_from_test_set(yaml_file_path)
+
+            # Tính các thông số bổ sung
+            mIoU = self.calculate_miou(predictions, ground_truth_boxes)  # Tính mIoU
+            plate_detection_accuracy = self.calculate_plate_detection_accuracy(predictions, ground_truth_boxes)  # Tỷ lệ nhận diện biển số
+            average_confidence = self.calculate_average_confidence(predictions)  # Độ tin cậy trung bình
+
+            # Hiển thị kết quả
+            self.clear_results()
+            result_text = (
+                f"Kết quả kiểm tra mô hình:\n"
+                f"--------------------------\n"
+                f"mAP@0.5: {mAP_50:.4f}\n"
+                f"mAP@0.5:0.95: {mAP_50_95:.4f}\n"
+                f"mIoU: {mIoU:.4f}\n"
+                f"Độ tin cậy trung bình: {average_confidence:.2f}\n"
+                f"Tỷ lệ nhận diện biển số: {plate_detection_accuracy:.2f}%\n"
+            )
+            ttk.Label(self.result_frame, text=result_text, font=("Arial", 14), justify="left", bootstyle="secondary").pack(anchor="w", pady=10)
+
+        except Exception as e:
+            tk.messagebox.showerror("Lỗi", f"Đã xảy ra lỗi khi test: {e}")
+
+        finally:
+            # Kích hoạt lại giao diện
+            self.enable_buttons()
+
+    def disable_buttons(self):
+        """Đóng băng tất cả các nút trong giao diện."""
+        for widget in self.right_frame.winfo_children():
+            if isinstance(widget, ttk.Button):
+                widget.config(state="disabled")
+
+    def enable_buttons(self):
+        """Kích hoạt lại tất cả các nút trong giao diện."""
+        for widget in self.right_frame.winfo_children():
+            if isinstance(widget, ttk.Button):
+                widget.config(state="normal")
+
+
+    # def clear_results(self):
+    #     """Xóa nội dung hiển thị kết quả trong result_frame."""
+    #     for widget in self.result_frame.winfo_children():
+    #         widget.destroy()
+
     ##################################
     ###### Xóa nội dung right frame khi bấm sang button mới bên khung left frame
     def clear_right_frame(self):
@@ -438,19 +717,32 @@ class VideoPlayerApp:
     def show_detect_content(self):
         """Hiển thị nội dung hiện tại của Detect video và ảnh."""
         self.clear_right_frame()
-        
-        # Khung chứa nút tìm kiếm và đường dẫn video
+
+        # Khởi tạo OCR khi vào giao diện này
+        if not hasattr(self, 'ocr') or self.ocr is None:
+            try:
+                self.ocr = PaddleOCR(lang='en')  # Khởi tạo OCR
+            except Exception as e:
+                tk.messagebox.showerror("Lỗi", f"Không thể khởi tạo OCR: {e}")
+                return
+
+        # Tạo khung giao diện như bình thường
         self.top_controls = tk.Frame(self.right_frame, bg="#d3d3d3")
         self.top_controls.pack(side=tk.TOP, anchor='w', pady=10)
 
-        # Nút chọn video
+        # Phần chọn model
+        ttk.Label(self.top_controls, text="Chọn Mô Hình:", bootstyle="info").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.detect_model_path = tk.StringVar()
+        ttk.Entry(self.top_controls, textvariable=self.detect_model_path, width=100, state="readonly").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        ttk.Button(self.top_controls, text="Chọn Mô Hình", command=self.select_detect_model, bootstyle="primary").grid(row=0, column=2, padx=10, pady=5, sticky="w")
+
+        # Phần chọn video
+        ttk.Label(self.top_controls, text="Chọn Video hoặc Ảnh:", bootstyle="info").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.video_path_label = ttk.Label(self.top_controls, text="No video selected", bootstyle="secondary-inverse", anchor="w")
+        self.video_path_label.grid(row=1, column=1, padx=10, pady=5, sticky="w")
         self.select_video_icon = ImageTk.PhotoImage(Image.open("./img/select_video.png").resize((30, 30), Image.LANCZOS))
         self.btn_select = tk.Button(self.top_controls, image=self.select_video_icon, command=self.load_media)
-        self.btn_select.pack(side=tk.LEFT, padx=10)
-
-        # Label hiển thị đường dẫn video
-        self.video_path_label = ttk.Label(self.top_controls, text="No video selected", bootstyle="secondary-inverse", anchor="w")  # Đặt màu nền secondary
-        self.video_path_label.pack(side=tk.LEFT, padx=10, pady=5, fill=tk.X, expand=True)
+        self.btn_select.grid(row=1, column=2, padx=10, pady=5, sticky="w")
 
         # Canvas phát video
         self.canvas_video = tk.Canvas(self.right_frame, width=720, height=360, bg="white")
@@ -489,6 +781,17 @@ class VideoPlayerApp:
         self.canvas_results.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
 
+    def select_detect_model(self):
+        """Chọn và khởi tạo mô hình YOLO cho giao diện Detect."""
+        file_path = filedialog.askopenfilename(filetypes=[("YOLO Model Files", "*.pt")])
+        if file_path:
+            try:
+                self.detect_model = YOLO(file_path)  # Khởi tạo mô hình
+                self.detect_model_path.set(file_path)  # Lưu đường dẫn
+                tk.messagebox.showinfo("Thông báo", "Mô hình đã được tải thành công!")
+            except Exception as e:
+                tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
+
     def load_media(self):
         # Hộp thoại chọn media (ảnh hoặc video)
         self.media_path = filedialog.askopenfilename(filetypes=[("Media files", "*.gif;*.mp4;*.avi;*.mov;*.jpg;*.jpeg;*.png")])
@@ -508,6 +811,10 @@ class VideoPlayerApp:
 
     def update_canvas_image(self, frame):
         """Cập nhật hình ảnh lên Canvas."""
+        if not hasattr(self, 'canvas_video') or self.canvas_video is None:
+            tk.messagebox.showerror("Lỗi", "Canvas video chưa được khởi tạo. Vui lòng chuyển sang giao diện 'Detect video và ảnh'.")
+            return
+
         # Chuyển đổi từ BGR sang RGB để hiển thị trên Tkinter
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img_pil = Image.fromarray(frame_rgb)
@@ -547,7 +854,7 @@ class VideoPlayerApp:
         for box in boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             class_id = int(box.cls[0])
-            class_name = model.names[class_id]
+            class_name = self.detect_model.names[class_id]
             confidence = box.conf[0]
 
             # Tạo khóa dựa trên tên lớp và vị trí trung tâm của bounding box để xác định các đối tượng tương tự
@@ -626,7 +933,7 @@ class VideoPlayerApp:
 
 
     def run_yolo_on_image(self, image):
-        results = model(image)
+        results = self.detect_model(image)
         detected_objects = results[0].boxes
 
         # Xóa các widget cũ trong khung cuộn trước khi hiển thị kết quả mới
@@ -637,7 +944,7 @@ class VideoPlayerApp:
         for i, box in enumerate(detected_objects[:3]):
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             class_id = int(box.cls[0])
-            class_name = model.names[class_id]
+            class_name = self.detect_model.names[class_id]
 
             detected_img = image[y1:y2, x1:x2]
             detected_img_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
@@ -671,19 +978,29 @@ class VideoPlayerApp:
         Returns:
             detections: Danh sách thông tin phát hiện (bounding box, class, confidence, OCR text).
         """
-        results = model(frame)  # YOLO detection
-        best_detections = self.get_best_detections(results[0].boxes, frame)
+        # Sử dụng mô hình được chọn nếu có, nếu không thì thông báo lỗi
+        if not hasattr(self, 'detect_model') or self.detect_model is None:
+            tk.messagebox.showerror("Lỗi", "Mô hình chưa được khởi tạo hoặc chọn. Vui lòng chọn mô hình trước.")
+            return {}
 
-        # Xử lý OCR cho từng vùng được cắt
-        for key, data in best_detections.items():
-            cropped_img = data['image']
-            ocr_results = self.ocr.ocr(cropped_img, cls=True)
-            ocr_text = self.extract_ocr_text(ocr_results)  # Lấy văn bản OCR
+        try:
+            # Phát hiện đối tượng với mô hình được chọn
+            results = self.detect_model(frame)  # YOLO detection
+            best_detections = self.get_best_detections(results[0].boxes, frame)
 
-            # Thêm văn bản OCR vào phát hiện
-            best_detections[key]['ocr_text'] = ocr_text
+            # Xử lý OCR cho từng vùng được cắt
+            for key, data in best_detections.items():
+                cropped_img = data['image']
+                ocr_results = self.ocr.ocr(cropped_img, cls=True)
+                ocr_text = self.extract_ocr_text(ocr_results)  # Lấy văn bản OCR
 
-        return best_detections
+                # Thêm văn bản OCR vào phát hiện
+                best_detections[key]['ocr_text'] = ocr_text
+
+            return best_detections
+        except Exception as e:
+            tk.messagebox.showerror("Lỗi", f"Đã xảy ra lỗi khi phát hiện đối tượng: {e}")
+            return {}
     
     def draw_detections(self, frame, detections):
         """
@@ -802,7 +1119,7 @@ class VideoPlayerApp:
                     self.show_frame()
 
     def run_yolo_on_frame(self, frame):
-        results = model(frame)
+        results = self.detect_model(frame)
         detected_objects = results[0].boxes
 
         # Xóa các widget cũ trong khung cuộn trước khi hiển thị kết quả mới
@@ -813,7 +1130,7 @@ class VideoPlayerApp:
         for i, box in enumerate(detected_objects[:3]):
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             class_id = int(box.cls[0])
-            class_name = model.names[class_id]
+            class_name = self.detect_model.names[class_id]
 
             detected_img = frame[y1:y2, x1:x2]
             detected_img_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
@@ -857,6 +1174,7 @@ class VideoPlayerApp:
     
 
 # Tạo ứng dụng tkinter
-root = tk.Tk()
-app = VideoPlayerApp(root)
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = VideoPlayerApp(root)
+    root.mainloop()
