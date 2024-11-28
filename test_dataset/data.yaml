@@ -1,0 +1,13 @@
+train: ./train/images
+val: ./test/images
+test: ./test/images
+
+nc: 1
+names: ['bien_so']
+
+roboflow:
+  workspace: projecttlcn
+  project: biensoxe_all-7oln6
+  version: 5
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/projecttlcn/biensoxe_all-7oln6/dataset/5
