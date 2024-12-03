@@ -14,7 +14,7 @@ from PIL import Image, ImageTk
 from ultralytics import YOLO
 from paddleocr import PaddleOCR, draw_ocr
 
-#### Xử lý thread
+# #### Xử lý thread
 import threading
 import multiprocessing
 
@@ -22,6 +22,8 @@ import multiprocessing
 import os
 import pandas as pd
 import yaml
+import shutil
+import random
 
 # Thư viện xử lý toán học và mảng
 import numpy as np
@@ -33,42 +35,49 @@ from torchvision.ops import box_iou
 ### Khởi tạo YOLO model
 #model = YOLO('../Model/Models_yolov10n_dataBienSoNhieuLoaiv4_datanoscale_anhmau1nhan/runs/detect/train/weights/best.pt')
 
-def run_val_process(model_path, yaml_file_path, queue):
-        """
-        Hàm thực hiện YOLO model.val() trong một process riêng.
-        Args:
-            model_path (str): Đường dẫn đến mô hình YOLO.
-            yaml_file_path (str): Đường dẫn đến tệp .yaml.
-            queue (multiprocessing.Queue): Hàng đợi để truyền kết quả.
-        """
-        from ultralytics import YOLO  # Import YOLO trong process con
-        import os
+def train_yolov10(stop_event, data_yaml_path, output_dir, batch_size, epochs):
+    """Huấn luyện mô hình YOLOv10."""
+    try:
+        model = YOLO('yolov10n.pt')  # Tải mô hình YOLOv10
+        model.train(
+            data=data_yaml_path,
+            epochs=epochs,
+            batch=batch_size,
+            imgsz=640,
+            patience=10,
+            project=output_dir,
+        )
+        if stop_event.is_set():
+            print("Quá trình huấn luyện YOLOv10 đã bị dừng.")
+    except Exception as e:
+        print(f"Lỗi khi huấn luyện YOLOv10: {e}")
 
-        try:
-            # Load YOLO model
-            model = YOLO(model_path)
 
-            # Thực hiện val
-            results = model.val(data=yaml_file_path, save_json=True)
-            mAP_50 = results.box.map50
-            mAP_50_95 = results.box.map
+def train_other_model(stop_event, data_yaml_path, output_dir, batch_size, epochs):
+    """Huấn luyện cho các mô hình khác (placeholder)."""
+    try:
+        print("Huấn luyện mô hình khác...")
+        # Placeholder cho logic huấn luyện các mô hình khác
+        if stop_event.is_set():
+            print("Quá trình huấn luyện mô hình khác đã bị dừng.")
+    except Exception as e:
+        print(f"Lỗi khi huấn luyện mô hình khác: {e}")
 
-            # Gửi kết quả qua queue
-            queue.put((mAP_50, mAP_50_95))
-        except Exception as e:
-            queue.put(f"Lỗi: {e}")
 
 class VideoPlayerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("YOLOv10 App Video Detection")
+        self.root.title("Phần Mềm Nhận Diện Biển Số Xe Qua Video")
         self.root.state('zoomed')  # Phóng to nhưng vẫn giữ taskbar
         self.video_path = None
         self.paused = True
         self.replay_flag = False
         self.current_frame = None
-        self.frame_delay = 40  # Điều chỉnh thời gian delay giữa các frame (ms)
+        self.frame_delay = 15  # Điều chỉnh thời gian delay giữa các frame (ms)
         self.ocr = None #PaddleOCR(lang='en')  # Khởi tạo OCR
+
+        self.train_process = None  # Tiến trình huấn luyện
+        self.stop_event = multiprocessing.Event()  # Sự kiện dừng tiến trình
 
         # Thuộc tính video_images lưu trữ các hình ảnh hiển thị trên Canvas
         self.video_images = []  # Khởi tạo danh sách trống
@@ -100,15 +109,6 @@ class VideoPlayerApp:
             **button_style
         )
         btn_default.pack(fill=tk.X, padx=10, pady=10)
-
-        # # Placeholder cho các nút tính năng khác (sẽ thêm sau)
-        # btn_feature_1 = ttk.Button(
-        #     self.left_frame,
-        #     text="Tính năng 1",
-        #     command=self.placeholder_function,
-        #     **button_style
-        # )
-        # btn_feature_1.pack(fill=tk.X, padx=10, pady=10)
 
         # Nút để chuyển đến giao diện huấn luyện mô hình
         btn_train = ttk.Button(
@@ -223,26 +223,11 @@ class VideoPlayerApp:
 
     ###########################
     #### Tạo các button với chức năng
-      
-    # def create_left_buttons(self):
-    #     # Nút mặc định cho trang chủ
-    #     btn_default = tk.Button(self.left_frame, text="Trang chủ", command=self.init_default_content, bg="#ffffff")
-    #     btn_default.pack(fill=tk.X, padx=10, pady=5)
 
-    #     # Placeholder cho các nút tính năng khác (sẽ thêm sau)
-    #     btn_feature_1 = tk.Button(self.left_frame, text="Tính năng 1", command=self.placeholder_function, bg="#ffffff")
-    #     btn_feature_1.pack(fill=tk.X, padx=10, pady=5)
-
-    #     # Nút để chuyển đến giao diện huấn luyện mô hình
-    #     btn_train = tk.Button(self.left_frame, text="Train Model", command=self.show_train_frame, bg="#ffffff")
-    #     btn_train.pack(fill=tk.X, padx=10, pady=5)
-
-    #     # Nút để hiển thị giao diện "Detect video và ảnh"
-    #     btn_detect = tk.Button(self.left_frame, text="Detect video và ảnh", command=self.show_detect_content, bg="#ffffff")
-    #     btn_detect.pack(fill=tk.X, padx=10, pady=5)
-
-    ##################################
+    #####################################
+    #####################################
     #### Phần mô phỏng quá trình training với tùy chỉnh tham số 
+    ################################
 
     def show_train_frame(self):
         """Hiển thị giao diện để huấn luyện mô hình."""
@@ -251,105 +236,407 @@ class VideoPlayerApp:
         ttk.Label(self.right_frame, text="Train Model", font=("Arial", 18, "bold"), bootstyle="danger").pack(pady=20)
 
         # Đường dẫn đến tập dữ liệu train
-        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu training:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
         self.train_data_path = StringVar()
         train_entry = ttk.Entry(self.right_frame, textvariable=self.train_data_path, width=100, state="readonly")  # Đặt state="readonly"
         train_entry.pack(anchor="w", padx=20, pady=5)
         ttk.Button(self.right_frame, text="Chọn", command=self.select_train_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
 
-        # Đường dẫn đến dữ liệu validation
-        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu validation:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
-        self.val_data_path = StringVar()
-        val_entry = ttk.Entry(self.right_frame, textvariable=self.val_data_path, width=100, state="readonly")  # Đặt state="readonly"
-        val_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Button(self.right_frame, text="Chọn", command=self.select_val_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+        # Tỷ lệ Train/Test
+        ttk.Label(self.right_frame, text="Tỷ lệ Train/Test (%):", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.train_test_ratio = IntVar(value=85)  # Mặc định 85% dữ liệu cho Train
+        train_test_slider = ttk.Scale(
+            self.right_frame,
+            from_=50,
+            to=95,
+            orient="horizontal",
+            variable=self.train_test_ratio,
+            length=500,
+            bootstyle="danger",
+            command=self.update_train_test_label  # Liên kết cập nhật trực tiếp
+        )
+        train_test_slider.pack(anchor="w", padx=20, pady=5)
 
-        # Đường dẫn đến model
-        ttk.Label(self.right_frame, text="Đường dẫn đến mô hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
-        self.model_path = StringVar()
-        model_entry = ttk.Entry(self.right_frame, textvariable=self.model_path, width=100, state="readonly")  # Đặt state="readonly"
-        model_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Button(self.right_frame, text="Chọn", command=self.select_model_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+        # Hiển thị tỷ lệ Train/Test
+        self.train_test_label = ttk.Label(
+            self.right_frame,
+            text=f"Tỷ lệ Train: {self.train_test_ratio.get()}% - Test: {100 - self.train_test_ratio.get()}%",
+            bootstyle="secondary",
+        )
+        self.train_test_label.pack(anchor="w", padx=20, pady=5)
 
-        # Batch size
-        ttk.Label(self.right_frame, text="Chọn giá trị Batch size:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
-        self.batch_size = IntVar(value=16)
-        batch_size_slider = ttk.Scale(self.right_frame, from_=1, to=128, orient="horizontal", variable=self.batch_size, length=500, bootstyle="danger")
-        batch_size_slider.pack(anchor="w", padx=20, pady=5)
+        # Tỷ lệ Train/Valid
+        ttk.Label(self.right_frame, text="Tỷ lệ Train/Valid (%):", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.train_valid_ratio = IntVar(value=80)  # Giá trị mặc định là Train = 80%
+        ratio_slider = ttk.Scale(
+            self.right_frame,
+            from_=50,  # Tối thiểu Train = 50%
+            to=95,  # Tối đa Train = 95%
+            orient="horizontal",
+            variable=self.train_valid_ratio,
+            length=500,
+            bootstyle="danger",
+            command=self.update_ratio_label  # Liên kết hàm cập nhật nhãn
+        )
+        ratio_slider.pack(anchor="w", padx=20, pady=5)
 
-        # Hiển thị giá trị của batch size
-        self.batch_size_label = ttk.Label(self.right_frame, text=f"Batch size: {self.batch_size.get()}", bootstyle="secondary")
-        self.batch_size_label.pack(anchor="w", padx=20, pady=5)
-        batch_size_slider.bind("<Motion>", self.update_batch_size_label)
+        # Hiển thị tỷ lệ Train/Valid
+        self.ratio_label = ttk.Label(
+            self.right_frame,
+            text=f"Tỷ lệ Train: {self.train_valid_ratio.get()}% - Valid: {100 - self.train_valid_ratio.get()}%",
+            bootstyle="secondary",
+        )
+        self.ratio_label.pack(anchor="w", padx=20, pady=5)
 
-        # Epochs
-        ttk.Label(self.right_frame, text="Chọn giá trị Số epochs:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
-        self.epochs = IntVar(value=120)
-        epochs_slider = ttk.Scale(self.right_frame, from_=1, to=200, orient="horizontal", variable=self.epochs, length=500, bootstyle="success")
-        epochs_slider.pack(anchor="w", padx=20, pady=5)
+        # ComboBox chọn mô hình
+        ttk.Label(self.right_frame, text="Chọn mô hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.selected_model = StringVar(value="Chọn mô hình")
+        self.model_combo = ttk.Combobox(
+            self.right_frame,
+            textvariable=self.selected_model,
+            values=["YOLOv10",],  # Danh sách mô hình YOLO
+            state="readonly",
+            width=50,
+        )
+        self.model_combo.pack(anchor="w", padx=20, pady=5)
 
-        # Hiển thị giá trị của epochs
-        self.epochs_label = ttk.Label(self.right_frame, text=f"Số epochs: {self.epochs.get()}", bootstyle="secondary")
-        self.epochs_label.pack(anchor="w", padx=20, pady=5)
-        epochs_slider.bind("<Motion>", self.update_epochs_label)
-
-        # Nút bắt đầu train
-        ttk.Button(
+        # Nút điều khiển (Bắt đầu/Dừng)
+        self.control_button = ttk.Button(
             self.right_frame,
             text="Bắt đầu",
-            command=self.start_training,
+            command=self.toggle_train_process,
             bootstyle="success-outline",
-            width=20,  # Tăng độ rộng của nút
-        ).pack(anchor="w", padx=20, pady=20)  # Căn trái và thêm khoảng cách
+            width=20,
+        )
+        self.control_button.pack(anchor="w", padx=20, pady=20)
 
-    def update_batch_size_label(self, event):
-        """Cập nhật nhãn hiển thị giá trị batch size."""
-        self.batch_size_label.config(text=f"Batch size: {self.batch_size.get()}")
+    def update_train_test_label(self, event=None):
+        """Cập nhật nhãn hiển thị tỷ lệ Train/Test."""
+        train_ratio = self.train_test_ratio.get()
+        test_ratio = 100 - train_ratio
+        self.train_test_label.config(text=f"Tỷ lệ Train: {train_ratio}% - Test: {test_ratio}%")
 
-    def update_epochs_label(self, event):
-        """Cập nhật nhãn hiển thị giá trị epochs."""
-        self.epochs_label.config(text=f"Số epochs: {self.epochs.get()}")
+    def update_ratio_label(self, event=None):
+        """Cập nhật nhãn hiển thị tỷ lệ Train/Valid."""
+        train_ratio = self.train_valid_ratio.get()  # Giá trị từ thanh kéo (Train)
+        valid_ratio = 100 - train_ratio  # Tính tỷ lệ Valid
+        self.ratio_label.config(text=f"Tỷ lệ Train: {train_ratio}% - Valid: {valid_ratio}%")
 
     def select_train_path(self):
-        """Chọn đường dẫn dữ liệu training."""
+        """Chọn đường dẫn dữ liệu training và thiết lập tỉ lệ ban đầu."""
         path = filedialog.askdirectory()
         if path:
             self.train_data_path.set(path)  # Cập nhật giá trị vào hộp nhập
 
-    def select_val_path(self):
-        """Chọn đường dẫn dữ liệu validation."""
-        path = filedialog.askdirectory()
-        if path:
-            self.val_data_path.set(path)  # Cập nhật giá trị vào hộp nhập
+            try:
+                structure_type, train_count, valid_count, test_count = self.check_dataset_structure(path)
+            
+                # Tính tỉ lệ ban đầu
+                if structure_type == "YOLOv8":
+                    total_count = train_count + valid_count + test_count
+                    self.initial_train_test_ratio = int(((train_count + valid_count) / total_count) * 100)
+                    self.initial_train_valid_ratio = int((train_count / (train_count + valid_count)) * 100) if valid_count > 0 else 100
+                else:  # UNSPLIT
+                    self.initial_train_test_ratio = 85  # Mặc định 85:15
+                    self.initial_train_valid_ratio = 80  # Mặc định 80:20
 
-    def select_model_path(self):
-        """Chọn đường dẫn mô hình."""
-        path = filedialog.askopenfilename(filetypes=[("Model files", "*.pt;*.pth")])
-        if path:
-            self.model_path.set(path)  # Cập nhật giá trị vào hộp nhập
+                # Cập nhật tỉ lệ vào giao diện
+                self.train_test_ratio.set(self.initial_train_test_ratio)
+                self.train_valid_ratio.set(self.initial_train_valid_ratio)
+                self.update_train_test_label()
+                self.update_ratio_label()
+            except ValueError as e:
+                tk.messagebox.showerror("Lỗi", str(e))
+
+    def toggle_train_process(self):
+        """Chuyển đổi giữa trạng thái Bắt đầu và Dừng huấn luyện."""
+        if not hasattr(self, "is_training"):
+            self.is_training = False
+
+        if self.is_training:
+            # Nếu đang huấn luyện, dừng tiến trình
+            self.stop_training()
+        else:
+            # Nếu chưa huấn luyện, bắt đầu huấn luyện
+            self.start_training()
+
+    def check_dataset_structure(self, dataset_path):
+        """
+        Kiểm tra cấu trúc dataset và xác định số lượng ảnh trong mỗi tập.
+        """
+        train_images_path = os.path.join(dataset_path, "train", "images")
+        valid_images_path = os.path.join(dataset_path, "valid", "images")
+        test_images_path = os.path.join(dataset_path, "test", "images")
+
+        train_count = len(os.listdir(train_images_path)) if os.path.exists(train_images_path) else 0
+        valid_count = len(os.listdir(valid_images_path)) if os.path.exists(valid_images_path) else 0
+        test_count = len(os.listdir(test_images_path)) if os.path.exists(test_images_path) else 0
+
+        if train_count + valid_count + test_count > 0:
+            return "YOLOv8", train_count, valid_count, test_count
+
+        images_path = os.path.join(dataset_path, "images")
+        labels_path = os.path.join(dataset_path, "labels")
+
+        if os.path.exists(images_path) and os.path.exists(labels_path):
+            total_count = len(os.listdir(images_path))
+            return "UNSPLIT", total_count, 0, 0
+
+        raise ValueError("Dataset không hợp lệ hoặc thiếu cấu trúc cần thiết.")
+        
+    def calculate_ratios(self, train_count, valid_count, test_count):
+        """
+        Tính toán các tỷ lệ Train/Test, Valid, và Train.
+        Args:
+            train_count: Số lượng mẫu trong tập Train.
+            valid_count: Số lượng mẫu trong tập Valid.
+            test_count: Số lượng mẫu trong tập Test.
+        Returns:
+            train_test_ratio: Tỷ lệ (Train + Valid) trên tổng.
+            valid_ratio: Tỷ lệ Valid trên (Train + Valid).
+            train_ratio: Tỷ lệ Train trên (Train + Valid).
+        """
+        total_count = train_count + valid_count + test_count
+        # Tính tỷ lệ Train/Test
+        train_test_ratio = int(((train_count + valid_count) / total_count) * 100) if total_count > 0 else 0
+        # Tính tỷ lệ Valid
+        valid_ratio = int((valid_count / (train_count + valid_count)) * 100) if (train_count + valid_count) > 0 else 0
+        # Tính tỷ lệ Train
+        train_ratio = 100 - valid_ratio  # Train + Valid luôn bằng 100%
+
+        return train_test_ratio, valid_ratio, train_ratio
+
+    # hàm chia dataset theo tỉ lệ train và tỉ lệ valid
+    def split_dataset(self, dataset_path, train_ratio, valid_ratio):
+        """Chia dataset thành train, valid, test dựa trên tỷ lệ cung cấp."""
+        # Kiểm tra tỷ lệ
+        if train_ratio <= 0 or train_ratio > 100:
+            raise ValueError("Tỷ lệ Train không hợp lệ. Vui lòng chọn giá trị từ 1 đến 100.")
+        if valid_ratio < 0 or valid_ratio >= 100:
+            raise ValueError("Tỷ lệ Valid không hợp lệ. Vui lòng chọn giá trị từ 0 đến 99.")
+
+        # Tạo thư mục sao lưu tạm thời
+        temp_backup_path = os.path.join(dataset_path, "temp_backup")
+        temp_images_path = os.path.join(temp_backup_path, "images")
+        temp_labels_path = os.path.join(temp_backup_path, "labels")
+
+        os.makedirs(temp_images_path, exist_ok=True)
+        os.makedirs(temp_labels_path, exist_ok=True)
+
+        # Kiểm tra cấu trúc dataset
+        train_images_path = os.path.join(dataset_path, "train", "images")
+        train_labels_path = os.path.join(dataset_path, "train", "labels")
+        valid_images_path = os.path.join(dataset_path, "valid", "images")
+        valid_labels_path = os.path.join(dataset_path, "valid", "labels")
+        test_images_path = os.path.join(dataset_path, "test", "images")
+        test_labels_path = os.path.join(dataset_path, "test", "labels")
+
+        all_pairs = []  # Danh sách tổng hợp ảnh
+        dataset_structure = None
+
+        # Phát hiện cấu trúc
+        if os.path.exists(train_images_path) or os.path.exists(valid_images_path) or os.path.exists(test_images_path):
+            dataset_structure = "YOLOv8"
+            print("Phát hiện cấu trúc YOLOv8")
+            for path in [train_images_path, valid_images_path, test_images_path]:
+                if os.path.exists(path):
+                    image_files = sorted(os.listdir(path))
+                    for image in image_files:
+                        label = image.replace(".jpg", ".txt")
+                        label_path = os.path.join(path.replace("images", "labels"), label)
+                        if os.path.exists(label_path):
+                            all_pairs.append((os.path.join(path, image), label_path))
+        elif os.path.exists(os.path.join(dataset_path, "images")) and os.path.exists(os.path.join(dataset_path, "labels")):
+            dataset_structure = "UNSPLIT"
+            print("Phát hiện cấu trúc UNSPLIT")
+            images_path = os.path.join(dataset_path, "images")
+            labels_path = os.path.join(dataset_path, "labels")
+            image_files = sorted(os.listdir(images_path))
+            for image in image_files:
+                label = image.replace(".jpg", ".txt")
+                label_path = os.path.join(labels_path, label)
+                if os.path.exists(label_path):
+                    all_pairs.append((os.path.join(images_path, image), label_path))
+        else:
+            raise ValueError("Dataset không hợp lệ. Vui lòng kiểm tra cấu trúc thư mục.")
+
+        # Kiểm tra danh sách cặp ảnh-nhãn
+        if not all_pairs:
+            raise ValueError("Không tìm thấy bất kỳ cặp ảnh-nhãn hợp lệ nào trong dataset.")
+
+        # Sao chép dữ liệu vào `temp_backup`
+        for image_path, label_path in all_pairs:
+            shutil.copy(image_path, os.path.join(temp_images_path, os.path.basename(image_path)))
+            shutil.copy(label_path, os.path.join(temp_labels_path, os.path.basename(label_path)))
+
+        # Trộn và chia dataset
+        random.shuffle(all_pairs)
+        total_count = len(all_pairs)
+        train_count = int((train_ratio / 100) * total_count)
+        valid_count = int((valid_ratio / 100) * train_count)
+        valid_count = min(valid_count, train_count)
+        test_count = total_count - train_count
+
+        train_pairs = all_pairs[:train_count]
+        valid_pairs = train_pairs[-valid_count:]
+        train_pairs = train_pairs[:-valid_count]
+        test_pairs = all_pairs[train_count:]
+
+        print(f"Tổng số mẫu: {total_count}")
+        print(f"Số mẫu Train: {train_count}")
+        print(f"Số mẫu Valid: {valid_count}")
+        print(f"Số mẫu Test: {test_count}")
+
+        # Sao chép cặp ảnh vào thư mục đích
+        def copy_files(pair_list, dest_images_path, dest_labels_path):
+            for image_path, label_path in pair_list:
+                os.makedirs(dest_images_path, exist_ok=True)
+                os.makedirs(dest_labels_path, exist_ok=True)
+                shutil.copy(image_path, os.path.join(dest_images_path, os.path.basename(image_path)))
+                shutil.copy(label_path, os.path.join(dest_labels_path, os.path.basename(label_path)))
+
+        copy_files(train_pairs, train_images_path, train_labels_path)
+        copy_files(valid_pairs, valid_images_path, valid_labels_path)
+        copy_files(test_pairs, test_images_path, test_labels_path)
+
+        # Cập nhật file data.yaml
+        self.update_data_yaml(dataset_path, train_images_path, valid_images_path, test_images_path)
+
+        # Xóa thư mục UNSPLIT
+        if dataset_structure == "UNSPLIT":
+            shutil.rmtree(os.path.join(dataset_path, "images"), ignore_errors=True)
+            shutil.rmtree(os.path.join(dataset_path, "labels"), ignore_errors=True)
+            print("Đã xóa các thư mục UNSPLIT.")
+
+        # Xóa thư mục tạm
+        shutil.rmtree(temp_backup_path)
+        print("Đã xóa thư mục tạm.")
+
+
+    def update_data_yaml(self, dataset_path, train_images_path, valid_images_path, test_images_path):
+        """
+        Cập nhật nội dung file data.yaml, chỉ update các đường dẫn.
+        Args:
+            dataset_path: Đường dẫn gốc của dataset.
+            train_images_path: Đường dẫn đến tập train/images.
+            valid_images_path: Đường dẫn đến tập valid/images.
+            test_images_path: Đường dẫn đến tập test/images.
+        """
+        # Đường dẫn file data.yaml
+        data_yaml_path = os.path.join(dataset_path, "data.yaml")
+        # Nếu file `data.yaml` đã tồn tại, chỉ update các đường dẫn
+        if os.path.exists(data_yaml_path):
+            with open(data_yaml_path, "r") as yaml_file:
+                yaml_data = yaml.safe_load(yaml_file)
+        else:
+            # Nếu file chưa tồn tại, tạo mới cấu trúc yaml cơ bản
+            yaml_data = {
+                "nc": 1,  # Số lượng class (mặc định là 1, cập nhật nếu cần)
+                "names": ["bienso"]  # Tên class (mặc định là "bienso")
+            }
+        # Cập nhật đường dẫn mới
+        yaml_data["train"] = os.path.abspath(train_images_path)
+        yaml_data["val"] = os.path.abspath(valid_images_path)
+        yaml_data["test"] = os.path.abspath(test_images_path)
+        # Ghi lại file `data.yaml`
+        with open(data_yaml_path, "w") as yaml_file:
+            yaml.dump(yaml_data, yaml_file, default_flow_style=False)
+        print(f"File data.yaml đã được cập nhật: {data_yaml_path}")
 
     def start_training(self):
-        """Hàm xử lý khi nhấn nút bắt đầu train."""
+        """Khởi động tiến trình huấn luyện."""
         train_path = self.train_data_path.get()
-        val_path = self.val_data_path.get()
-        model_path = self.model_path.get()
-        batch_size = self.batch_size.get()
-        epochs = self.epochs.get()
+        selected_model = self.selected_model.get()
+        current_train_test_ratio = self.train_test_ratio.get()
+        current_train_valid_ratio = self.train_valid_ratio.get()
 
-        if not train_path or not val_path or not model_path:
-            tk.messagebox.showerror("Lỗi", "Hãy chọn đầy đủ các đường dẫn cần thiết.")
+        if not train_path or selected_model == "Chọn mô hình":
+            tk.messagebox.showerror("Lỗi", "Hãy chọn mô hình và thông tin đầy đủ.")
             return
 
-        # Hiển thị thông tin cấu hình
-        tk.messagebox.showinfo("Thông tin", f"Đang huấn luyện mô hình từ:\n"
-                                            f"Training path: {train_path}\n"
-                                            f"Validation path: {val_path}\n"
-                                            f"Model path: {model_path}\n"
-                                            f"Batch size: {batch_size}\n"
-                                            f"Epochs: {epochs}")
+        # Kiểm tra cấu trúc dataset
+        try:
+            structure_type, train_count, valid_count, test_count = self.check_dataset_structure(train_path)
+        except ValueError as e:
+            tk.messagebox.showerror("Lỗi", str(e))
+            return
+
+        # Kiểm tra và thực hiện chia lại dataset
+        if (
+            structure_type == "UNSPLIT" or
+            current_train_test_ratio != self.initial_train_test_ratio or
+            current_train_valid_ratio != self.initial_train_valid_ratio
+        ):
+            # Tính lại tỷ lệ train/valid/test
+            train_ratio = current_train_test_ratio
+            valid_ratio = int(train_ratio * (100 - current_train_valid_ratio) / 100)
+
+            print("Tỷ lệ mới:")
+            print(f"Train Ratio: {train_ratio}%")
+            print(f"Valid Ratio: {valid_ratio}%")
+            print(f"Test Ratio: {100 - train_ratio}%")
+
+            # Chia lại dataset
+            self.split_dataset(train_path, train_ratio, valid_ratio)
+
+            # Cập nhật lại tỷ lệ ban đầu
+            self.initial_train_test_ratio = current_train_test_ratio
+            self.initial_train_valid_ratio = current_train_valid_ratio
+
+        # Bắt đầu tiến trình huấn luyện
+        output_dir = "../Model/YOLOv10/"
+        data_yaml_path = os.path.join(train_path, "data.yaml")
+        os.makedirs(output_dir, exist_ok=True)
+
+        self.stop_event = multiprocessing.Event()
+
+        if selected_model == "YOLOv10":
+            self.train_process = multiprocessing.Process(
+                target=train_yolov10,
+                args=(self.stop_event, data_yaml_path, output_dir, 16, 120) # train với batch size và số epochs
+            )
+        else:
+            tk.messagebox.showerror("Lỗi", f"Mô hình '{selected_model}' chưa được hỗ trợ.")
+            return
+
+        # Chuyển trạng thái sang đang huấn luyện
+        self.is_training = True
+        self.control_button.config(text="Dừng", bootstyle="danger-outline")
+        self.train_process.start()
+
+        # Kiểm tra trạng thái tiến trình
+        self.check_training_status()
+
+    def stop_training(self):
+        """Dừng tiến trình huấn luyện."""
+        if self.train_process and self.train_process.is_alive():
+            self.stop_event.set()  # Gửi tín hiệu dừng
+            self.train_process.terminate()  # Dừng tiến trình
+            self.train_process.join()  # Chờ tiến trình kết thúc
+            self.is_training = False  # Đặt trạng thái không huấn luyện
+            self.control_button.config(text="Bắt đầu", bootstyle="success-outline")
+            tk.messagebox.showinfo("Thông báo", "Quá trình huấn luyện đã dừng.")
+        else:
+            tk.messagebox.showwarning("Cảnh báo", "Không có quá trình huấn luyện nào đang chạy!")
+
+    def check_training_status(self):
+        """Kiểm tra trạng thái tiến trình và cập nhật nút điều khiển."""
+        if self.train_process and not self.train_process.is_alive():
+            # Nếu tiến trình đã kết thúc
+            self.is_training = False
+            self.control_button.config(text="Bắt đầu", bootstyle="success-outline")
+            tk.messagebox.showinfo("Thông báo", "Quá trình huấn luyện đã hoàn tất.")
+        else:
+            # Tiếp tục kiểm tra sau 500ms
+            self.root.after(500, self.check_training_status)
 
     ###################################
+    ###################################
+    ####################################
     ##### Phần hiển thị các thông số đánh giá của mô hình
+    ####################################
+    ####################################
+
     def show_model_results(self):
         """Hiển thị giao diện chọn thư mục và kết quả mô hình."""
         self.clear_right_frame()
@@ -361,12 +648,15 @@ class VideoPlayerApp:
         # Tiêu đề
         ttk.Label(self.selection_frame, text="Kết quả mô hình", font=("Arial", 18, "bold"), bootstyle="danger").pack(pady=20)
         
-        # Chọn đường dẫn thư mục
-        ttk.Label(self.selection_frame, text="Chọn thư mục chứa mô hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
-        self.model_dir_path = StringVar()
-        model_dir_entry = ttk.Entry(self.selection_frame, textvariable=self.model_dir_path, width=150, state="readonly")
-        model_dir_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Button(self.selection_frame, text="Chọn", command=self.select_model_dir, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+        # ComboBox để chọn mô hình
+        ttk.Label(self.selection_frame, text="Chọn mô hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+        self.model_dir_var = StringVar()
+        self.model_combo = ttk.Combobox(self.selection_frame, textvariable=self.model_dir_var, state="readonly", width=100)
+        self.model_combo.pack(anchor="w", padx=20, pady=5)
+        # Nút xem kết quả
+        ttk.Button(self.selection_frame, text="Xem kết quả", command=self.calculate_results, bootstyle="primary").pack(anchor="w", padx=20, pady=10)
+        # Lấy danh sách các thư mục mô hình trong '../Model'
+        self.populate_model_combo()
 
         # Tạo khung hiển thị kết quả
         self.result_frame = ttk.Frame(self.right_frame,)
@@ -376,6 +666,43 @@ class VideoPlayerApp:
         """Xóa nội dung hiển thị kết quả trong result_frame."""
         for widget in self.result_frame.winfo_children():
             widget.destroy()
+
+    def populate_model_combo(self):
+        """Điền danh sách các mô hình vào ComboBox từ thư mục '../Model'."""
+        model_base_path = "../Model"
+        if not os.path.exists(model_base_path):
+            tk.messagebox.showerror("Lỗi", f"Thư mục '{model_base_path}' không tồn tại.")
+            return
+
+        model_dirs = ["Chọn mô hình"]
+        self.model_paths = {}  # Lưu đường dẫn tương ứng với từng mục trong ComboBox
+
+        # Duyệt qua từng thư mục trong '../Model'
+        for model_name in os.listdir(model_base_path):
+            model_path = os.path.join(model_base_path, model_name)
+            if os.path.isdir(model_path):  # Kiểm tra thư mục
+                # Thêm thư mục gốc (ví dụ: YOLOv10)
+                model_dirs.append(model_name)
+                self.model_paths[model_name] = os.path.join(model_path, "runs", "detect", "train")
+
+                # Duyệt thêm các thư mục con (nếu có)
+                sub_dirs = os.listdir(model_path)
+                for sub_dir in sub_dirs:
+                    sub_dir_path = os.path.join(model_path, sub_dir)
+                    if os.path.isdir(sub_dir_path):  # Kiểm tra thư mục con
+                        # Kiểm tra xem thư mục con có đủ file cần thiết không
+                        results_file = os.path.join(sub_dir_path, "results.csv")
+                        args_file = os.path.join(sub_dir_path, "args.yaml")
+                        weights_path = os.path.join(sub_dir_path, "weights", "best.pt")
+                        if os.path.exists(results_file) and os.path.exists(args_file) and os.path.exists(weights_path):
+                            combo_label = f"{model_name} - {sub_dir}"  # Ví dụ: YOLOv10 - train
+                            model_dirs.append(combo_label)
+                            self.model_paths[combo_label] = sub_dir_path
+
+        # Gán danh sách thư mục vào ComboBox
+        self.model_combo["values"] = model_dirs
+        if model_dirs:
+            self.model_combo.current(0)  # Chọn giá trị đầu tiên mặc định
 
     def select_model_dir(self):
         """Chọn thư mục chứa mô hình và hiển thị kết quả nếu tìm được file."""
@@ -395,13 +722,21 @@ class VideoPlayerApp:
             self.calculate_results()
 
     def calculate_results(self):
-        """Tính toán kết quả từ các file trong thư mục và hiển thị."""
-        model_dir = self.model_dir_path.get()
+        """Tính toán kết quả từ mô hình đã chọn, đảm bảo thông tin hiển thị ngay cả khi thiếu cột 'time'."""
+        selected_model = self.model_dir_var.get()
+         # Kiểm tra nếu người dùng chưa chọn mô hình
+        if not selected_model or selected_model == "Chọn mô hình":
+            tk.messagebox.showerror("Lỗi", "Hãy chọn một mô hình hợp lệ từ danh sách.")
+            return
+
+        model_dir = self.model_paths.get(selected_model, None)
+        if not model_dir or not os.path.exists(model_dir):
+            tk.messagebox.showerror("Lỗi", f"Không tìm thấy thư mục '{model_dir}'.")
+            return
 
         # Tìm file cần thiết
         results_file = os.path.join(model_dir, 'results.csv')
         args_file = os.path.join(model_dir, 'args.yaml')
-        best_model_file = os.path.join(model_dir, 'weights', 'best.pt')
 
         if not os.path.exists(results_file) or not os.path.exists(args_file):
             self.clear_results()
@@ -411,28 +746,64 @@ class VideoPlayerApp:
         # Đọc file results.csv
         try:
             data = pd.read_csv(results_file)
+            # Chuẩn hóa tên cột
+            data.columns = data.columns.str.strip()
+        except pd.errors.EmptyDataError:
+            self.clear_results()
+            ttk.Label(self.result_frame, text="File results.csv trống hoặc không hợp lệ.", bootstyle="danger").pack(pady=10)
+            return
         except Exception as e:
             self.clear_results()
             ttk.Label(self.result_frame, text=f"Lỗi khi đọc file results.csv: {e}", bootstyle="danger").pack(pady=10)
             return
 
+        # Kiểm tra các cột cần thiết
+        required_columns = [
+            'train/box_loss', 'train/cls_loss', 'train/dfl_loss',
+            'val/box_loss', 'val/cls_loss', 'val/dfl_loss',
+            'metrics/precision(B)', 'metrics/recall(B)', 'metrics/mAP50(B)', 'metrics/mAP50-95(B)'
+        ]
+        missing_columns = [col for col in required_columns if col not in data.columns]
+        if missing_columns:
+            self.clear_results()
+            ttk.Label(
+                self.result_frame,
+                text=f"Thiếu các cột dữ liệu sau trong results.csv: {', '.join(missing_columns)}",
+                bootstyle="danger"
+            ).pack(pady=10)
+            return
+
+        # Xử lý thiếu cột 'time'
+        time_available = 'time' in data.columns
+
         # Tính toán train_loss, val_loss, object_accuracy
-        data['train_loss'] = data['train/box_loss'] + data['train/cls_loss'] + data['train/dfl_loss']
-        data['val_loss'] = data['val/box_loss'] + data['val/cls_loss'] + data['val/dfl_loss']
-        data['object_accuracy'] = 2 * (data['metrics/precision(B)'] * data['metrics/recall(B)']) / (
-            data['metrics/precision(B)'] + data['metrics/recall(B)']
-        )
-        data['object_accuracy'] = data['object_accuracy'].fillna(0)  # Xử lý chia cho 0
+        try:
+            data['train_loss'] = data['train/box_loss'] + data['train/cls_loss'] + data['train/dfl_loss']
+            data['val_loss'] = data['val/box_loss'] + data['val/cls_loss'] + data['val/dfl_loss']
+            data['object_accuracy'] = 2 * (data['metrics/precision(B)'] * data['metrics/recall(B)']) / (
+                data['metrics/precision(B)'] + data['metrics/recall(B)']
+            )
+            data['object_accuracy'] = data['object_accuracy'].fillna(0)
+            data['fitness'] = (0.1 * data['metrics/mAP50(B)'] + 0.9 * data['metrics/mAP50-95(B)'])
+        except Exception as e:
+            self.clear_results()
+            ttk.Label(self.result_frame, text=f"Lỗi khi tính toán các chỉ số: {e}", bootstyle="danger").pack(pady=10)
+            return
 
-        # Tính fitness
-        data['fitness'] = (0.1 * data['metrics/mAP50(B)'] + 0.9 * data['metrics/mAP50-95(B)'])
-        best_epoch = data.loc[data['fitness'].idxmax()]
-
-        # Chỉ lấy thời gian tại dòng tốt nhất
-        best_time_seconds = best_epoch['time']
-        hours, remainder = divmod(best_time_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        formatted_time = f"{int(hours)}:{int(minutes):02d}:{int(seconds):02d}"
+        # Lấy thông tin từ epoch tốt nhất
+        try:
+            best_epoch = data.loc[data['fitness'].idxmax()]
+            if time_available and pd.notna(best_epoch['time']) and best_epoch['time'] > 0:
+                best_time_seconds = best_epoch['time']
+                hours, remainder = divmod(best_time_seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                formatted_time = f"{int(hours)}:{int(minutes):02d}:{int(seconds):02d}"
+            else:
+                formatted_time = "Không xác định"
+        except Exception as e:
+            self.clear_results()
+            ttk.Label(self.result_frame, text=f"Lỗi khi lấy thông tin epoch tốt nhất: {e}", bootstyle="danger").pack(pady=10)
+            return
 
         # Đọc args.yaml
         try:
@@ -450,7 +821,7 @@ class VideoPlayerApp:
         # Hiển thị kết quả trong result_frame
         ttk.Label(self.result_frame, text="Kết quả mô hình sau khi huấn luyện:", font=("Arial", 18, "bold"), bootstyle="success").pack(anchor="w", pady=10)
         result_text = (
-            #f"Đường dẫn mô hình: {model_dir}\n"
+            f"Đường dẫn mô hình: {model_dir}\n"
             f"Số Epochs: {int(best_epoch['epoch'])}\n"
             f"Thời gian huấn luyện tại epoch tốt nhất: {formatted_time}\n"
             f"Train Loss: {best_epoch['train_loss']:.4f}\n"
@@ -462,8 +833,12 @@ class VideoPlayerApp:
         )
         ttk.Label(self.result_frame, text=result_text, font=('Arial', 14), justify="left", bootstyle="secondary").pack(anchor="w", pady=10)
 
-    ############################################
+    ##################################################
+    ##################################################
+    ##################################################
     ###### Test mô hình trên các tập dữ liệu test
+    #############################################
+    #############################################
 
     def show_test_frame(self):
         """Hiển thị giao diện để test mô hình."""
@@ -473,15 +848,16 @@ class VideoPlayerApp:
 
         # Phần chọn mô hình
         ttk.Label(self.right_frame, text="Chọn Mô Hình:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
-        self.custom_model_path = StringVar()  # Lưu đường dẫn mô hình được chọn
-        ttk.Entry(self.right_frame, textvariable=self.custom_model_path, width=100, state="readonly").pack(anchor="w", padx=20, pady=5)
-        ttk.Button(self.right_frame, text="Chọn Mô Hình", command=self.select_custom_model, bootstyle="primary").pack(anchor="w", padx=20, pady=10)
+        self.model_dir_var = StringVar()
+        self.model_combo = ttk.Combobox(self.right_frame, textvariable=self.model_dir_var, state="readonly", width=100)
+        self.model_combo.pack(anchor="w", padx=20, pady=5)
+        self.populate_test_model_combo()  # Gọi hàm populate mới
 
-        # Phần chọn tệp data.yaml
-        ttk.Label(self.right_frame, text="Đường dẫn đến dữ liệu test (.yaml):", bootstyle="info").pack(anchor="w", padx=20, pady=5)
+         # Phần chọn tập dữ liệu
+        ttk.Label(self.right_frame, text="Chọn Tập Dữ Liệu:", bootstyle="info").pack(anchor="w", padx=20, pady=5)
         self.yaml_file_path = StringVar()
         ttk.Entry(self.right_frame, textvariable=self.yaml_file_path, width=100, state="readonly").pack(anchor="w", padx=20, pady=5)
-        ttk.Button(self.right_frame, text="Chọn", command=self.select_yaml_file, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
+        ttk.Button(self.right_frame, text="Chọn", command=self.select_dataset_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
 
         # Nút bắt đầu test
         ttk.Button(
@@ -496,24 +872,98 @@ class VideoPlayerApp:
         self.result_frame = ttk.Frame(self.right_frame)
         self.result_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
-    def select_custom_model(self):
-        """Xử lý khi người dùng chọn một mô hình YOLO mới."""
-        file_path = filedialog.askopenfilename(filetypes=[("YOLO Model Files", "*.pt")])  # Chỉ cho phép chọn tệp .pt
-        if file_path:
-            self.custom_model_path.set(file_path)  # Lưu đường dẫn mô hình vào biến
+    def populate_test_model_combo(self):
+        """Điền danh sách các mô hình vào ComboBox từ thư mục '../Model'."""
+        model_base_path = "../Model"
+        if not os.path.exists(model_base_path):
+            tk.messagebox.showerror("Lỗi", f"Thư mục '{model_base_path}' không tồn tại.")
+            return
+
+        model_dirs = ["Chọn mô hình"]
+        self.model_paths = {}  # Lưu đường dẫn tương ứng với từng mục trong ComboBox
+
+        # Duyệt qua từng thư mục trong '../Model'
+        for model_name in os.listdir(model_base_path):
+            model_path = os.path.join(model_base_path, model_name)
+            if os.path.isdir(model_path):
+                if model_name == "YOLOv10":
+                    # Model chính
+                    main_model_path = os.path.join(model_path, "runs", "detect", "train", "weights", "best.pt")
+                    if os.path.exists(main_model_path):
+                        model_dirs.append(model_name)
+                        self.model_paths[model_name] = main_model_path
+
+                    # Các thư mục train, train1, train2, ...
+                    for sub_dir in os.listdir(model_path):
+                        sub_dir_path = os.path.join(model_path, sub_dir)
+                        weights_path = os.path.join(sub_dir_path, "weights", "best.pt")
+                        if os.path.isdir(sub_dir_path) and os.path.exists(weights_path):
+                            combo_label = f"{model_name} - {sub_dir}"
+                            model_dirs.append(combo_label)
+                            self.model_paths[combo_label] = weights_path
+
+        # Gán danh sách mô hình vào ComboBox
+        self.model_combo["values"] = model_dirs
+        if model_dirs:
+            self.model_combo.current(0)  # Chọn giá trị đầu tiên mặc định
+
+        # Liên kết sự kiện chọn mô hình
+        self.model_combo.bind("<<ComboboxSelected>>", self.on_model_selected)
+
+    def on_model_selected(self, event):
+        """Xử lý sự kiện khi người dùng chọn mô hình từ ComboBox."""
+        selected_model = self.model_combo.get()
+        if selected_model == "Chọn mô hình":
+            tk.messagebox.showinfo("Thông báo", "Vui lòng chọn một mô hình hợp lệ!")
+            self.custom_model = None
+            return
+
+        if selected_model in self.model_paths:
+            model_path = self.model_paths[selected_model]
             try:
-                # Tải mô hình YOLO mới
-                self.custom_model = YOLO(file_path)
-                tk.messagebox.showinfo("Thông báo", "Mô hình đã được tải thành công!")
+                self.custom_model = YOLO(model_path)
+                tk.messagebox.showinfo("Thông báo", f"Mô hình '{selected_model}' đã được tải thành công!")
             except Exception as e:
                 tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
-                self.custom_model = None  # Đặt về None nếu tải mô hình thất bại
+                self.custom_model = None
 
-    def select_yaml_file(self):
-        """Mở hộp thoại để chọn tệp data.yaml."""
-        file_path = filedialog.askopenfilename(filetypes=[("YAML files", "*.yaml")])
-        if file_path:
-            self.yaml_file_path.set(file_path)  # Lưu đường dẫn tệp đã chọn  
+    def create_copy_data_yaml(self, original_yaml_path, test_images_path):
+        """Tạo file copy_data.yaml thay thế val path bằng test path."""
+        copy_yaml_path = os.path.join(os.path.dirname(original_yaml_path), "copy_data.yaml")
+        try:
+            with open(original_yaml_path, "r") as file:
+                yaml_data = yaml.safe_load(file)
+            yaml_data["val"] = test_images_path  # Thay đường dẫn val bằng test/images
+            with open(copy_yaml_path, "w") as file:
+                yaml.dump(yaml_data, file)
+            self.copy_yaml_path = copy_yaml_path
+        except Exception as e:
+            tk.messagebox.showerror("Lỗi", f"Không thể tạo file 'copy_data.yaml': {e}")
+            self.copy_yaml_path = None
+
+    def select_dataset_path(self):
+        """Xử lý khi người dùng chọn tập dữ liệu."""
+        dataset_path = filedialog.askdirectory()  # Chọn thư mục dataset
+        if not dataset_path:
+            return
+
+        data_yaml_path = os.path.join(dataset_path, "data.yaml")
+        test_images_path = os.path.join(dataset_path, "test/images")
+
+        if not os.path.exists(data_yaml_path):
+            tk.messagebox.showerror("Lỗi", f"Không tìm thấy file 'data.yaml' trong: {dataset_path}")
+            return
+        if not os.path.exists(test_images_path):
+            tk.messagebox.showerror("Lỗi", f"Không tìm thấy thư mục 'test/images' trong: {dataset_path}")
+            return
+        # Xóa file copy_data.yaml cũ nếu đã có
+        if hasattr(self, "copy_yaml_path") and self.copy_yaml_path and os.path.exists(self.copy_yaml_path):
+            os.remove(self.copy_yaml_path)
+            print(f"Đã xóa file tạm cũ: {self.copy_yaml_path}")
+
+        # Lưu đường dẫn gốc và tạo file copy_data.yaml
+        self.yaml_file_path.set(data_yaml_path)
+        self.create_copy_data_yaml(data_yaml_path, test_images_path) 
 
     def get_test_paths(self, yaml_file_path):
         """Lấy đường dẫn tới tập ảnh và nhãn test."""
@@ -524,7 +974,7 @@ class VideoPlayerApp:
         print("IMAGE PATH:", images_path)
         print("LABELS PATH:", labels_path)
 
-        return {'images': images_path, 'labels': labels_path}   
+        return {'images': images_path, 'labels': labels_path}
 
     def read_ground_truth_boxes(self, yaml_file_path):
         """Đọc các bounding box từ nhãn ground truth."""
@@ -583,31 +1033,61 @@ class VideoPlayerApp:
         return predictions
     
     def calculate_miou(self, predictions, ground_truth_boxes):
-        """Tính mIoU giữa dự đoán và ground truth."""
+        """Tính toán mIoU giữa các dự đoán và ground truth boxes."""
         ious = []
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         for image_name, gt_boxes in ground_truth_boxes.items():
             pred_boxes = predictions.get(image_name, {}).get('boxes', [])
-            if len(pred_boxes) > 0 and len(gt_boxes) > 0:
-                iou_matrix = box_iou(torch.tensor(pred_boxes), torch.tensor(gt_boxes))
-                max_ious = iou_matrix.max(dim=1).values.numpy()
-                ious.extend(max_ious)
+            if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+                continue  # Bỏ qua nếu không có bounding boxes hợp lệ
+            # Chuyển đổi sang tensor và đảm bảo định dạng (N, 4)
+            pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
+            gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
+            if pred_boxes.shape[1] != 4 or gt_boxes.shape[1] != 4:
+                continue  # Bỏ qua nếu định dạng không đúng (N, 4)
+            # Tính toán IoU
+            iou_matrix = box_iou(pred_boxes, gt_boxes)
+            # Lấy giá trị IoU lớn nhất cho mỗi box dự đoán
+            max_ious = iou_matrix.max(dim=1).values.cpu().numpy()
+            ious.extend(max_ious)
 
+        # Tính giá trị trung bình mIoU
         return np.mean(ious) if ious else 0
 
     def calculate_plate_detection_accuracy(self, predictions, ground_truth_boxes, iou_threshold=0.5):
-        """Tính tỷ lệ nhận diện biển số dựa trên các khung dự đoán và nhãn ground truth."""
-        correct_detections = 0
-        total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
+        """
+        Tính tỷ lệ nhận diện biển số dựa trên các khung dự đoán và nhãn ground truth.
+        """
+        try:
+            correct_detections = 0
+            total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
 
-        for image_name, gt_boxes in ground_truth_boxes.items():
-            pred_boxes = predictions.get(image_name, {}).get('boxes', [])
-            if len(pred_boxes) > 0:
-                iou_matrix = box_iou(torch.tensor(pred_boxes), torch.tensor(gt_boxes))
-                max_ious = iou_matrix.max(dim=0).values.numpy()
-                correct_detections += sum(iou >= iou_threshold for iou in max_ious)
+            for image_name, gt_boxes in ground_truth_boxes.items():
+                pred_boxes = predictions.get(image_name, {}).get('boxes', [])
+                
+                # Chuyển sang tensor
+                pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32)
+                gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32)
 
-        return (correct_detections / total_plates) * 100 if total_plates > 0 else 0
+                # Bỏ qua ảnh nếu không có dự đoán hoặc ground truth
+                if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+                    continue
+
+                # Tính IoU
+                iou_matrix = box_iou(pred_boxes, gt_boxes)
+                max_ious = iou_matrix.max(dim=0).values  # Lấy giá trị IoU lớn nhất cho mỗi nhãn thực tế
+
+                # Tính số lượng dự đoán đúng
+                correct_detections += (max_ious >= iou_threshold).sum().item()
+
+            # Tính tỷ lệ nhận diện
+            accuracy = (correct_detections / total_plates) * 100 if total_plates > 0 else 0
+            return accuracy
+
+        except Exception as e:
+            print(f"Lỗi khi tính tỷ lệ nhận diện biển số: {e}")
+            return 0
 
     def calculate_average_confidence(self, predictions):
         """
@@ -620,31 +1100,42 @@ class VideoPlayerApp:
 
     def start_testing(self):
         """Bắt đầu kiểm tra mô hình."""
-        yaml_file_path = self.yaml_file_path.get()
-
-        if not yaml_file_path:
-            tk.messagebox.showerror("Lỗi", "Hãy chọn tệp 'data.yaml'.")
+        if self.model_combo.get() == "Chọn mô hình trước tiên":
+            tk.messagebox.showerror("Lỗi", "Vui lòng chọn một mô hình trước khi bắt đầu kiểm tra!")
             return
 
-        # Đóng băng giao diện
+        if not hasattr(self, 'copy_yaml_path') or not self.copy_yaml_path:
+            tk.messagebox.showerror("Lỗi", "Hãy chọn tập dữ liệu hợp lệ với file 'copy_data.yaml' đã được tạo.")
+            return
+
+        yaml_file_path = self.copy_yaml_path
+
+        if not yaml_file_path or not os.path.exists(yaml_file_path):
+            tk.messagebox.showerror("Lỗi", f"Không tìm thấy tệp 'copy_data.yaml' tại: {yaml_file_path}")
+            return
+
+        # Vô hiệu hóa nút và hiển thị trạng thái
         self.disable_buttons()
-        self.run_testing(yaml_file_path)
-    
+        self.status_label = ttk.Label(self.result_frame, text="Đang test mô hình...", font=("Arial", 14), bootstyle="info")
+        self.status_label.pack(anchor="w", pady=10)
+
+        # Chạy quá trình kiểm tra trong luồng riêng
+        test_thread = threading.Thread(target=self.run_testing, args=(yaml_file_path,))
+        test_thread.start()
+
     def run_testing(self, yaml_file_path):
         """
-        Thực hiện kiểm tra mô hình, tính các thông số mAP, mIoU, độ tin cậy trung bình, và tỷ lệ nhận diện biển số.
+        Thực hiện kiểm tra mô hình và cập nhật GUI khi hoàn thành.
         """
         try:
             # Kiểm tra tệp YAML
             if not os.path.exists(yaml_file_path):
-                tk.messagebox.showerror("Lỗi", f"Không tìm thấy tệp 'data.yaml' tại: {yaml_file_path}")
-                self.enable_buttons()
+                self.status_label.config(text="Lỗi: Không tìm thấy tệp 'data.yaml'")
                 return
 
-            # Kiểm tra nếu mô hình chưa được chọn
+            # Kiểm tra mô hình
             if not hasattr(self, 'custom_model') or self.custom_model is None:
-                tk.messagebox.showerror("Lỗi", "Mô hình chưa được chọn. Vui lòng chọn một mô hình trước khi tiếp tục.")
-                self.enable_buttons()
+                self.status_label.config(text="Lỗi: Mô hình chưa được chọn.")
                 return
 
             # Tính mAP bằng model.val()
@@ -657,12 +1148,11 @@ class VideoPlayerApp:
             predictions = self.get_predictions_from_test_set(yaml_file_path)
 
             # Tính các thông số bổ sung
-            mIoU = self.calculate_miou(predictions, ground_truth_boxes)  # Tính mIoU
-            plate_detection_accuracy = self.calculate_plate_detection_accuracy(predictions, ground_truth_boxes)  # Tỷ lệ nhận diện biển số
-            average_confidence = self.calculate_average_confidence(predictions)  # Độ tin cậy trung bình
+            mIoU = self.calculate_miou(predictions, ground_truth_boxes)
+            plate_detection_accuracy = self.calculate_plate_detection_accuracy(predictions, ground_truth_boxes)
+            average_confidence = self.calculate_average_confidence(predictions)
 
-            # Hiển thị kết quả
-            self.clear_results()
+            # Tạo kết quả
             result_text = (
                 f"Kết quả kiểm tra mô hình:\n"
                 f"--------------------------\n"
@@ -672,13 +1162,16 @@ class VideoPlayerApp:
                 f"Độ tin cậy trung bình: {average_confidence:.2f}\n"
                 f"Tỷ lệ nhận diện biển số: {plate_detection_accuracy:.2f}%\n"
             )
-            ttk.Label(self.result_frame, text=result_text, font=("Arial", 14), justify="left", bootstyle="secondary").pack(anchor="w", pady=10)
+
+            # Cập nhật GUI
+            self.status_label.config(text=result_text, bootstyle="success")
 
         except Exception as e:
-            tk.messagebox.showerror("Lỗi", f"Đã xảy ra lỗi khi test: {e}")
+            # Hiển thị lỗi trên GUI
+            self.status_label.config(text=f"Lỗi khi kiểm tra mô hình: {e}", bootstyle="danger")
 
         finally:
-            # Kích hoạt lại giao diện
+            # Kích hoạt lại các nút
             self.enable_buttons()
 
     def disable_buttons(self):
@@ -712,8 +1205,13 @@ class VideoPlayerApp:
         label = tk.Label(self.right_frame, text="Tính năng này chưa được triển khai.", bg="#d3d3d3")
         label.pack(expand=True)
 
-    ########################################
+    ####################################################
+    ###################################################
     ####### Phần detect video/ảnh hay demo 
+    #######################################################
+    ######################################################
+    ######################################################
+
     def show_detect_content(self):
         """Hiển thị nội dung hiện tại của Detect video và ảnh."""
         self.clear_right_frame()
@@ -730,11 +1228,15 @@ class VideoPlayerApp:
         self.top_controls = tk.Frame(self.right_frame, bg="#d3d3d3")
         self.top_controls.pack(side=tk.TOP, anchor='w', pady=10)
 
-        # Phần chọn model
+         # Phần chọn model bằng ComboBox
         ttk.Label(self.top_controls, text="Chọn Mô Hình:", bootstyle="info").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.detect_model_path = tk.StringVar()
-        ttk.Entry(self.top_controls, textvariable=self.detect_model_path, width=100, state="readonly").grid(row=0, column=1, padx=10, pady=5, sticky="w")
-        ttk.Button(self.top_controls, text="Chọn Mô Hình", command=self.select_detect_model, bootstyle="primary").grid(row=0, column=2, padx=10, pady=5, sticky="w")
+        self.detect_model_var = StringVar()
+        self.detect_model_combo = ttk.Combobox(self.top_controls, textvariable=self.detect_model_var, state="readonly", width=50)
+        self.detect_model_combo.grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        self.populate_detect_model_combo()  # Gọi hàm để điền danh sách mô hình
+
+        # Liên kết sự kiện chọn mô hình
+        self.detect_model_combo.bind("<<ComboboxSelected>>", self.on_detect_model_selected)
 
         # Phần chọn video
         ttk.Label(self.top_controls, text="Chọn Video hoặc Ảnh:", bootstyle="info").grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -781,16 +1283,54 @@ class VideoPlayerApp:
         self.canvas_results.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
 
-    def select_detect_model(self):
-        """Chọn và khởi tạo mô hình YOLO cho giao diện Detect."""
-        file_path = filedialog.askopenfilename(filetypes=[("YOLO Model Files", "*.pt")])
-        if file_path:
+    def populate_detect_model_combo(self):
+        """Điền danh sách các mô hình vào ComboBox từ thư mục '../Model'."""
+        model_base_path = "../Model"
+        if not os.path.exists(model_base_path):
+            tk.messagebox.showerror("Lỗi", f"Thư mục '{model_base_path}' không tồn tại.")
+            return
+
+        model_dirs = ["Chọn mô hình"]
+        self.detect_model_paths = {}
+
+        for model_name in os.listdir(model_base_path):
+            model_path = os.path.join(model_base_path, model_name)
+            if os.path.isdir(model_path):
+                # Model chính
+                main_model_path = os.path.join(model_path, "runs", "detect", "train", "weights", "best.pt")
+                if os.path.exists(main_model_path):
+                    model_dirs.append(model_name)
+                    self.detect_model_paths[model_name] = main_model_path
+
+                # Các thư mục con
+                for sub_dir in os.listdir(model_path):
+                    sub_dir_path = os.path.join(model_path, sub_dir)
+                    weights_path = os.path.join(sub_dir_path, "weights", "best.pt")
+                    if os.path.isdir(sub_dir_path) and os.path.exists(weights_path):
+                        combo_label = f"{model_name} - {sub_dir}"
+                        model_dirs.append(combo_label)
+                        self.detect_model_paths[combo_label] = weights_path
+
+        # Gán danh sách vào ComboBox
+        self.detect_model_combo["values"] = model_dirs
+        self.detect_model_combo.current(0)  # Mặc định chọn "Chọn mô hình"
+
+    def on_detect_model_selected(self, event):
+        """Xử lý sự kiện khi người dùng chọn mô hình từ ComboBox."""
+        selected_model = self.detect_model_combo.get()
+        if selected_model == "Chọn mô hình":
+            tk.messagebox.showinfo("Thông báo", "Vui lòng chọn một mô hình hợp lệ!")
+            self.detect_model = None
+            return
+
+        if selected_model in self.detect_model_paths:
+            model_path = self.detect_model_paths[selected_model]
             try:
-                self.detect_model = YOLO(file_path)  # Khởi tạo mô hình
-                self.detect_model_path.set(file_path)  # Lưu đường dẫn
-                tk.messagebox.showinfo("Thông báo", "Mô hình đã được tải thành công!")
+                self.detect_model = YOLO(model_path)
+                tk.messagebox.showinfo("Thông báo", f"Mô hình '{selected_model}' đã được tải thành công!")
             except Exception as e:
                 tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
+                self.detect_model = None
 
     def load_media(self):
         # Hộp thoại chọn media (ảnh hoặc video)
@@ -837,8 +1377,8 @@ class VideoPlayerApp:
             y_offset = (canvas_height - new_height) // 2
             self.canvas_image_id = self.canvas_video.create_image(x_offset, y_offset, anchor=tk.NW, image=img_tk)
 
-        # Lưu ảnh để tránh bị xóa
-        self.video_images.append(img_tk)
+        # Lưu ảnh vào thuộc tính để giữ tham chiếu và tránh bị thu hồi bộ nhớ
+        self.current_image = img_tk
 
     def get_best_detections(self, boxes, image):
         """
@@ -918,16 +1458,12 @@ class VideoPlayerApp:
         """
         # Tạo bản sao của frame gốc
         original_frame = image.copy()
-
         # Phát hiện đối tượng và chạy OCR
         detections = self.process_frame(original_frame)
-
         # Vẽ bounding box, label, và OCR text lên ảnh
         processed_frame = self.draw_detections(image, detections)
-
         # Hiển thị các ảnh cắt ra trong khung cuộn
         self.display_detected_images(detections)
-
         # Cập nhật ảnh đã xử lý lên Canvas
         self.update_canvas_image(processed_frame)
 
@@ -935,11 +1471,9 @@ class VideoPlayerApp:
     def run_yolo_on_image(self, image):
         results = self.detect_model(image)
         detected_objects = results[0].boxes
-
         # Xóa các widget cũ trong khung cuộn trước khi hiển thị kết quả mới
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
-
         # Hiển thị các đối tượng được phát hiện trong khung cuộn
         for i, box in enumerate(detected_objects[:3]):
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -960,7 +1494,7 @@ class VideoPlayerApp:
                 f"Tọa độ: (x1: {x1}, y1: {y1}), (x2: {x2}, y2: {y2})"
             ), anchor='w', justify='left', bg="#d3d3d3")
             label_info.pack(anchor='w', padx=10, pady=2)
-
+            
     def toggle_play_pause(self):
         if self.paused:
             self.paused = False
