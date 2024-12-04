@@ -3,6 +3,7 @@ tk
 opencv-contrib-python==4.10.0.84
 Pillow==10.4.0
 ultralytics
+paddlepaddle
 paddleocr==2.8.1
 pandas==2.2.3
 pyyaml==6.0.2
