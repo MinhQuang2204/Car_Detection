@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['bienso']
+
+roboflow:
+  workspace: tlcndata
+  project: biensoxenhieuloai
+  version: 4
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/tlcndata/biensoxenhieuloai/dataset/4

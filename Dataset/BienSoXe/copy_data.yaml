@@ -1,0 +1,12 @@
+names:
+- bienso
+nc: 1
+roboflow:
+  license: CC BY 4.0
+  project: biensoxenhieuloai
+  url: https://universe.roboflow.com/tlcndata/biensoxenhieuloai/dataset/4
+  version: 4
+  workspace: tlcndata
+test: ../test/images
+train: ../train/images
+val: D:/HocTap/TieuLuanChuyenNganh_2/Project/Car_Detection/Dataset/BienSoXe\test/images

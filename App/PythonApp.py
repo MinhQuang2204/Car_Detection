@@ -324,7 +324,7 @@ class VideoPlayerApp:
 
     def select_train_path(self):
         """Chọn đường dẫn dữ liệu training và thiết lập tỉ lệ ban đầu."""
-        path = filedialog.askdirectory()
+        path = filedialog.askdirectory(initialdir="../Dataset") # mặc định thiết lập ở thư mục Dataset
         if path:
             self.train_data_path.set(path)  # Cập nhật giá trị vào hộp nhập
 
@@ -704,22 +704,22 @@ class VideoPlayerApp:
         if model_dirs:
             self.model_combo.current(0)  # Chọn giá trị đầu tiên mặc định
 
-    def select_model_dir(self):
-        """Chọn thư mục chứa mô hình và hiển thị kết quả nếu tìm được file."""
-        base_path = filedialog.askdirectory()
-        if base_path:
-            # Ghép thêm /runs/detect/train
-            model_dir = os.path.join(base_path, "runs", "detect", "train")
+    # def select_model_dir(self):
+    #     """Chọn thư mục chứa mô hình và hiển thị kết quả nếu tìm được file."""
+    #     base_path = filedialog.askdirectory()
+    #     if base_path:
+    #         # Ghép thêm /runs/detect/train
+    #         model_dir = os.path.join(base_path, "runs", "detect", "train")
 
-            # Kiểm tra thư mục có tồn tại không
-            if not os.path.exists(model_dir):
-                self.clear_results()
-                ttk.Label(self.result_frame, text="Thư mục không tồn tại.", bootstyle="danger").pack(pady=10)
-                return
+    #         # Kiểm tra thư mục có tồn tại không
+    #         if not os.path.exists(model_dir):
+    #             self.clear_results()
+    #             ttk.Label(self.result_frame, text="Thư mục không tồn tại.", bootstyle="danger").pack(pady=10)
+    #             return
 
-            # Cập nhật đường dẫn và tính toán kết quả
-            self.model_dir_path.set(model_dir)
-            self.calculate_results()
+    #         # Cập nhật đường dẫn và tính toán kết quả
+    #         self.model_dir_path.set(model_dir)
+    #         self.calculate_results()
 
     def calculate_results(self):
         """Tính toán kết quả từ mô hình đã chọn, đảm bảo thông tin hiển thị ngay cả khi thiếu cột 'time'."""
@@ -943,7 +943,7 @@ class VideoPlayerApp:
 
     def select_dataset_path(self):
         """Xử lý khi người dùng chọn tập dữ liệu."""
-        dataset_path = filedialog.askdirectory()  # Chọn thư mục dataset
+        dataset_path = filedialog.askdirectory(initialdir="../Dataset")  # Chọn thiết lập mặc định tại thư mục Dataset
         if not dataset_path:
             return
 
@@ -1224,19 +1224,17 @@ class VideoPlayerApp:
                 tk.messagebox.showerror("Lỗi", f"Không thể khởi tạo OCR: {e}")
                 return
 
-        # Tạo khung giao diện như bình thường
+        # Khung chứa nội dung trên cùng
         self.top_controls = tk.Frame(self.right_frame, bg="#d3d3d3")
         self.top_controls.pack(side=tk.TOP, anchor='w', pady=10)
 
-         # Phần chọn model bằng ComboBox
+        # Phần chọn mô hình
         ttk.Label(self.top_controls, text="Chọn Mô Hình:", bootstyle="info").grid(row=0, column=0, padx=10, pady=5, sticky="w")
         self.detect_model_var = StringVar()
         self.detect_model_combo = ttk.Combobox(self.top_controls, textvariable=self.detect_model_var, state="readonly", width=50)
         self.detect_model_combo.grid(row=0, column=1, padx=10, pady=5, sticky="w")
-        self.populate_detect_model_combo()  # Gọi hàm để điền danh sách mô hình
-
-        # Liên kết sự kiện chọn mô hình
-        self.detect_model_combo.bind("<<ComboboxSelected>>", self.on_detect_model_selected)
+        self.populate_detect_model_combo()  # Điền danh sách mô hình
+        self.detect_model_combo.bind("<<ComboboxSelected>>", self.on_detect_model_selected)  # Liên kết sự kiện chọn
 
         # Phần chọn video
         ttk.Label(self.top_controls, text="Chọn Video hoặc Ảnh:", bootstyle="info").grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -1246,13 +1244,16 @@ class VideoPlayerApp:
         self.btn_select = tk.Button(self.top_controls, image=self.select_video_icon, command=self.load_media)
         self.btn_select.grid(row=1, column=2, padx=10, pady=5, sticky="w")
 
-        # Canvas phát video
-        self.canvas_video = tk.Canvas(self.right_frame, width=720, height=360, bg="white")
-        self.canvas_video.pack(side=tk.TOP, pady=10)
+        # Khung bên trái chứa canvas video
+        self.left_frame = tk.Frame(self.right_frame, bg="#d3d3d3", width=800, height=600)  # Tăng chiều rộng ở đây
+        self.left_frame.pack(side=tk.LEFT, padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        self.canvas_video = tk.Canvas(self.left_frame, width=720, height=480, bg="white")
+        self.canvas_video.pack(side=tk.TOP, pady=10, fill=tk.BOTH, expand=True)  # Cập nhật `fill` và `expand`
 
         # Nút Play/Pause và Replay
-        self.control_frame = tk.Frame(self.right_frame, bg="#d3d3d3")
-        self.control_frame.pack(side=tk.TOP, pady=10)
+        self.control_frame = tk.Frame(self.left_frame, bg="#d3d3d3")
+        self.control_frame.pack(side=tk.TOP, pady=10, fill=tk.X)
 
         self.play_icon = ImageTk.PhotoImage(Image.open("./img/play.png").resize((30, 30), Image.LANCZOS))
         self.pause_icon = ImageTk.PhotoImage(Image.open("./img/pause.png").resize((30, 30), Image.LANCZOS))
@@ -1264,9 +1265,9 @@ class VideoPlayerApp:
         self.btn_replay = tk.Button(self.control_frame, image=self.replay_icon, command=self.replay_video)
         self.btn_replay.pack(side=tk.LEFT, padx=10)
 
-        # Khung hiển thị kết quả với thanh cuộn
-        self.result_frame = tk.Frame(self.right_frame, bg="#d3d3d3")
-        self.result_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10)
+        # Khung hiển thị kết quả (Thanh cuộn) bên phải
+        self.result_frame = tk.Frame(self.right_frame, bg="#d3d3d3", width=300)  # Đặt chiều rộng cho khung phải
+        self.result_frame.pack(side=tk.LEFT, fill=tk.Y, expand=False, padx=10)
 
         self.canvas_results = tk.Canvas(self.result_frame, bg="#d3d3d3")
         self.scrollbar = tk.Scrollbar(self.result_frame, orient="vertical", command=self.canvas_results.yview)
@@ -1333,8 +1334,15 @@ class VideoPlayerApp:
                 self.detect_model = None
 
     def load_media(self):
+        # Kiểm tra nếu mô hình chưa được chọn
+        if not hasattr(self, 'detect_model') or self.detect_model is None:
+            tk.messagebox.showerror("Lỗi", "Vui lòng chọn mô hình trước khi tiếp tục!")
+            return
         # Hộp thoại chọn media (ảnh hoặc video)
-        self.media_path = filedialog.askopenfilename(filetypes=[("Media files", "*.gif;*.mp4;*.avi;*.mov;*.jpg;*.jpeg;*.png")])
+        self.media_path = filedialog.askopenfilename(
+            initialdir="../PredictData",
+            filetypes=[("Media files", "*.gif;*.mp4;*.avi;*.mov;*.jpg;*.jpeg;*.png")]
+        )
         if self.media_path:
             if self.media_path.lower().endswith(('.gif','.mp4', '.avi', '.mov')):
                 # Nếu là video
@@ -1699,8 +1707,15 @@ class VideoPlayerApp:
 
     def replay_video(self):
         if self.video_cap is not None:
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Đặt lại video về frame đầu tiên
             self.replay_flag = True
+            self.paused = False  # Đảm bảo trạng thái không bị tạm dừng
+            self.btn_play_pause.config(image=self.pause_icon)  # Cập nhật nút sang trạng thái Pause
+
+            # Dừng bất kỳ vòng lặp frame nào đang chạy
+            self.root.after_cancel(getattr(self, '_after_id', None))
+
+            # Bắt đầu hiển thị lại khung hình
             self.show_frame()
 
     def video_playing(self):

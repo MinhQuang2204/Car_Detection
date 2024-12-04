@@ -1,0 +1,10 @@
+ttkbootstrap
+tk
+opencv-contrib-python==4.10.0.84
+Pillow==10.4.0
+ultralytics
+paddleocr==2.8.1
+pandas==2.2.3
+pyyaml==6.0.2
+numpy==1.26.4
+scipy==1.14.1
