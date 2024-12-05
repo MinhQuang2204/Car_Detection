@@ -1,5 +1,7 @@
 App/runs/*
 Dataset/test/*.cache
+Dataset/BienSoXe/copy_data.yaml
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
