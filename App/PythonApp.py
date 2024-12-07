@@ -5,6 +5,7 @@ from tkinter import filedialog, PhotoImage, Label, Frame, Entry, Button, StringV
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+from ttkbootstrap import Style
 
 #### import thư viên opencv và PIL để phục vụ quá trình xử lý ảnh
 import cv2
@@ -17,6 +18,8 @@ from paddleocr import PaddleOCR, draw_ocr
 # #### Xử lý thread
 import threading
 import multiprocessing
+from multiprocessing import Process, Event, Queue
+import concurrent.futures
 
 #### Các thư viện khác
 import os
@@ -24,6 +27,8 @@ import pandas as pd
 import yaml
 import shutil
 import random
+import time
+from datetime import datetime
 
 # Thư viện xử lý toán học và mảng
 import numpy as np
@@ -35,6 +40,11 @@ from torchvision.ops import box_iou
 ### Khởi tạo YOLO model
 #model = YOLO('../Model/Models_yolov10n_dataBienSoNhieuLoaiv4_datanoscale_anhmau1nhan/runs/detect/train/weights/best.pt')
 
+#######################################################################################################################
+# Các hàm xử lý khi phải thực hiện multiprocess, hàm sử dụng trong multiprocess (đa tiến trình) không phải là các
+# phương thức được định nghĩa mà phải khai báo toàn cục để có thể gọi vào trong tiến trình
+#
+#######################################################################################################################
 def train_yolov10(stop_event, data_yaml_path, output_dir, batch_size, epochs):
     """Huấn luyện mô hình YOLOv10."""
     try:
@@ -52,7 +62,6 @@ def train_yolov10(stop_event, data_yaml_path, output_dir, batch_size, epochs):
     except Exception as e:
         print(f"Lỗi khi huấn luyện YOLOv10: {e}")
 
-
 def train_other_model(stop_event, data_yaml_path, output_dir, batch_size, epochs):
     """Huấn luyện cho các mô hình khác (placeholder)."""
     try:
@@ -62,7 +71,240 @@ def train_other_model(stop_event, data_yaml_path, output_dir, batch_size, epochs
             print("Quá trình huấn luyện mô hình khác đã bị dừng.")
     except Exception as e:
         print(f"Lỗi khi huấn luyện mô hình khác: {e}")
+###################################
+def run_testing_process(model_path, yaml_file_path, result_queue, stop_event, display_model_name):
+    """
+    Thực hiện kiểm tra mô hình và lưu kết quả.
+    Args:
+        model_path (str): Đường dẫn đến mô hình.
+        yaml_file_path (str): Đường dẫn file YAML của dataset.
+        result_queue (Queue): Hàng đợi để lưu kết quả.
+        stop_event (Event): Sự kiện dừng tiến trình.
+        display_model_name (str): Tên hiển thị của mô hình trên ComboBox.
+    """
+    try:
+        # Tải mô hình YOLO
+        if stop_event.is_set():
+            result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng trước khi bắt đầu."))
+            return
+        
+        model = YOLO(model_path)
+        # Chạy kiểm tra trong một tiến trình phụ
+        def run_model_val():
+            return model.val(data=yaml_file_path, save_json=True)
 
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_model_val)
+
+            # Chờ tiến trình hoàn tất hoặc dừng tiến trình
+            while not future.done():
+                if stop_event.is_set():
+                    result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng khi đang chạy mô hình."))
+                    future.cancel()
+                    return
+
+        # Nếu không bị dừng, lấy kết quả
+        results = future.result()
+        mAP_50 = results.box.map50
+        mAP_50_95 = results.box.map
+        # Kiểm tra nếu có tín hiệu dừng
+        if stop_event.is_set():
+            result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng sau khi kiểm tra mAP."))
+            return
+        # Lấy thông tin bộ dữ liệu
+        dataset_name = os.path.basename(os.path.dirname(yaml_file_path))
+        # Tính các chỉ số bổ sung
+        ground_truth_boxes = read_ground_truth_boxes(yaml_file_path)
+        predictions = get_predictions_from_test_set(model, yaml_file_path)
+
+        if stop_event.is_set():
+            result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng sau khi lấy dự đoán."))
+            return
+
+        mIoU = calculate_miou(predictions, ground_truth_boxes)
+        plate_detection_accuracy = calculate_plate_detection_accuracy(predictions, ground_truth_boxes)
+        average_confidence = calculate_average_confidence(predictions)
+        # Lưu kết quả
+        result_text = (
+            f"Kết quả kiểm tra mô hình:\n"
+            f"Tên mô hình: {display_model_name}\n"  # Hiển thị tên từ ComboBox
+            f"Dataset: {dataset_name}\n"
+            f"mAP@0.5: {mAP_50:.4f}\n"
+            f"mAP@0.5:0.95: {mAP_50_95:.4f}\n"
+            f"mIoU: {mIoU:.4f}\n"
+            f"Độ tin cậy trung bình: {average_confidence:.2f}\n"
+            f"Tỷ lệ nhận diện biển số: {plate_detection_accuracy:.2f}%\n"
+        )
+        result_file = save_test_results(display_model_name, dataset_name, result_text)
+        if stop_event.is_set():
+            result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng sau khi lưu kết quả."))
+            return
+        result_queue.put(("completed", f"Kết quả đã được lưu tại: {result_file}\n{result_text}"))
+    except Exception as e:
+        result_queue.put(("error", f"Lỗi khi kiểm tra mô hình: {e}"))
+
+def read_ground_truth_boxes(yaml_file_path):
+    """Đọc các bounding box từ nhãn ground truth."""
+    test_paths = get_test_paths(yaml_file_path)
+    labels_path = test_paths['labels']
+    images_path = test_paths['images']
+    ground_truth_boxes = {}
+    for label_file in os.listdir(labels_path):
+        if not label_file.endswith('.txt'):
+            continue
+        image_name = label_file.replace('.txt', '.jpg')
+        image_path = os.path.join(images_path, image_name)
+        if not os.path.exists(image_path):
+            continue
+        with Image.open(image_path) as img:
+            image_width, image_height = img.size
+        boxes = []
+        with open(os.path.join(labels_path, label_file), 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                _, x_center, y_center, width, height = map(float, parts)
+
+                # Chuyển đổi từ định dạng YOLO sang [x1, y1, x2, y2]
+                x1 = (x_center - width / 2) * image_width
+                y1 = (y_center - height / 2) * image_height
+                x2 = (x_center + width / 2) * image_width
+                y2 = (y_center + height / 2) * image_height
+
+                boxes.append([x1, y1, x2, y2])
+        ground_truth_boxes[image_name] = boxes
+    return ground_truth_boxes
+
+def get_predictions_from_test_set(model, yaml_file_path):
+    """Lấy bounding box dự đoán từ mô hình YOLO."""
+    test_paths = get_test_paths(yaml_file_path)
+    images_path = test_paths['images']
+
+    predictions = {}
+    results = model.predict(source=images_path, save=False)
+
+    for result in results:
+        image_name = os.path.basename(result.path)
+        boxes = result.boxes.xyxy.cpu().numpy()
+        confidences = result.boxes.conf.cpu().numpy()
+
+        predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
+
+    return predictions
+
+def calculate_miou(predictions, ground_truth_boxes):
+    """Tính toán mIoU giữa các dự đoán và ground truth boxes."""
+    ious = []
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    for image_name, gt_boxes in ground_truth_boxes.items():
+        pred_boxes = predictions.get(image_name, {}).get('boxes', [])
+        if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+            continue  # Bỏ qua nếu không có bounding boxes hợp lệ
+
+        pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
+        gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
+
+        iou_matrix = box_iou(pred_boxes, gt_boxes)
+        max_ious = iou_matrix.max(dim=1).values.cpu().numpy()
+        ious.extend(max_ious)
+
+    return np.mean(ious) if ious else 0
+
+def calculate_plate_detection_accuracy(predictions, ground_truth_boxes, iou_threshold=0.5):
+    """Tính tỷ lệ nhận diện biển số."""
+    correct_detections = 0
+    total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
+
+    for image_name, gt_boxes in ground_truth_boxes.items():
+        pred_boxes = predictions.get(image_name, {}).get('boxes', [])
+        pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32)
+        gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32)
+
+        if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+            continue
+
+        iou_matrix = box_iou(pred_boxes, gt_boxes)
+        max_ious = iou_matrix.max(dim=0).values
+
+        correct_detections += (max_ious >= iou_threshold).sum().item()
+
+    return (correct_detections / total_plates) * 100 if total_plates > 0 else 0
+
+def calculate_average_confidence(predictions):
+    """Tính độ tin cậy trung bình từ các bounding box dự đoán."""
+    confidences = []
+    for data in predictions.values():
+        confidences.extend(data.get('confidences', []))
+    return np.mean(confidences) if confidences else 0
+
+def get_test_paths(yaml_file_path):
+    """
+    Lấy đường dẫn tới tập ảnh và nhãn test từ file yaml.
+    Args:
+        yaml_file_path (str): Đường dẫn tới file yaml.
+    Returns:
+        dict: Bao gồm đường dẫn tới thư mục chứa ảnh và nhãn.
+    """
+    base_path = os.path.dirname(yaml_file_path)
+    images_path = os.path.join(base_path, "test/images")
+    labels_path = os.path.join(base_path, "test/labels")
+
+    return {'images': images_path, 'labels': labels_path}
+
+def save_test_results(model_name, dataset_name, result_text):
+    """Lưu kết quả kiểm tra vào thư mục tương ứng."""
+    save_dir = f"./TestResults/{model_name}"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Tạo tên file với thời gian hiện tại
+    timestamp = time.strftime("%H-%M-%S_%d-%m-%Y")
+    file_name = f"{model_name}_{dataset_name}_{timestamp}.txt"
+    file_path = os.path.join(save_dir, file_name)
+
+    # Sử dụng encoding='utf-8' để hỗ trợ các ký tự đặc biệt
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(result_text)
+    print(f"Kết quả được lưu tại: {file_path}")
+
+    # Cập nhật tệp lưu kết quả cuối cùng
+    last_result_path = os.path.join(save_dir, f"last_result_{dataset_name}.txt")
+    with open(last_result_path, "w", encoding="utf-8") as f:
+        f.write(result_text)
+    print(f"Kết quả cuối cùng được lưu tại: {last_result_path}")
+
+    return file_path
+
+def load_last_test_results(model_name, dataset_name):
+    """
+    Đọc kết quả kiểm tra gần nhất từ thư mục ./TestResults/<model_name>.
+    Args:
+        model_name (str): Tên mô hình.
+        dataset_name (str): Tên dataset.
+    Returns:
+        str: Nội dung kết quả, hoặc None nếu không tìm thấy.
+    """
+    model_dir = os.path.join("./TestResults", model_name)
+    if not os.path.exists(model_dir):
+        return None
+    # Tìm các tệp liên quan đến dataset
+    relevant_files = [
+        f for f in os.listdir(model_dir)
+        if f.endswith(".txt") and dataset_name in f
+    ]
+    if not relevant_files:
+        return None
+    # Sắp xếp tệp theo thời gian (mới nhất trước)
+    relevant_files.sort(reverse=True)
+    latest_file = os.path.join(model_dir, relevant_files[0])
+
+    with open(latest_file, "r", encoding="utf-8") as file:
+        return file.read()
+
+############################################################################################################################
+############################################################################################################################
+########Phần giao diện 
+############################################################################################################################
+############################################################################################################################
 
 class VideoPlayerApp:
     def __init__(self, root):
@@ -77,6 +319,7 @@ class VideoPlayerApp:
         self.ocr = None #PaddleOCR(lang='en')  # Khởi tạo OCR
 
         self.train_process = None  # Tiến trình huấn luyện
+        self.test_process = None    # Tiến trình kiểm tra (test)
         self.stop_event = multiprocessing.Event()  # Sự kiện dừng tiến trình
 
         # Thuộc tính video_images lưu trữ các hình ảnh hiển thị trên Canvas
@@ -242,6 +485,17 @@ class VideoPlayerApp:
         train_entry.pack(anchor="w", padx=20, pady=5)
         ttk.Button(self.right_frame, text="Chọn", command=self.select_train_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
 
+        # Tạo style tùy chỉnh cho thanh kéo
+        style = ttk.Style()
+        style.configure(
+            "Custom.Horizontal.TScale",
+            troughcolor="red",  # Màu nền thanh kéo
+            sliderlength=30,  # Độ dài thanh trượt
+            sliderthickness=15,  # Độ dày thanh trượt
+            sliderrelief="flat", 
+            background="pink",  # Màu thanh trượt
+        )
+
         # Tỷ lệ Train/Test
         ttk.Label(self.right_frame, text="Tỷ lệ Train/Test (%):", bootstyle="info").pack(anchor="w", padx=20, pady=5)
         self.train_test_ratio = IntVar(value=85)  # Mặc định 85% dữ liệu cho Train
@@ -253,7 +507,8 @@ class VideoPlayerApp:
             variable=self.train_test_ratio,
             length=500,
             bootstyle="danger",
-            command=self.update_train_test_label  # Liên kết cập nhật trực tiếp
+            command=self.update_train_test_label,  # Liên kết cập nhật trực tiếp
+            style="Custom.Horizontal.TScale",  # Sử dụng style tùy chỉnh
         )
         train_test_slider.pack(anchor="w", padx=20, pady=5)
 
@@ -261,7 +516,7 @@ class VideoPlayerApp:
         self.train_test_label = ttk.Label(
             self.right_frame,
             text=f"Tỷ lệ Train: {self.train_test_ratio.get()}% - Test: {100 - self.train_test_ratio.get()}%",
-            bootstyle="secondary",
+            bootstyle="success",
         )
         self.train_test_label.pack(anchor="w", padx=20, pady=5)
 
@@ -276,6 +531,7 @@ class VideoPlayerApp:
             variable=self.train_valid_ratio,
             length=500,
             bootstyle="danger",
+            style="Custom.Horizontal.TScale",  # Sử dụng style tùy chỉnh
             command=self.update_ratio_label  # Liên kết hàm cập nhật nhãn
         )
         ratio_slider.pack(anchor="w", padx=20, pady=5)
@@ -284,7 +540,7 @@ class VideoPlayerApp:
         self.ratio_label = ttk.Label(
             self.right_frame,
             text=f"Tỷ lệ Train: {self.train_valid_ratio.get()}% - Valid: {100 - self.train_valid_ratio.get()}%",
-            bootstyle="secondary",
+            bootstyle="success",
         )
         self.ratio_label.pack(anchor="w", padx=20, pady=5)
 
@@ -859,14 +1115,15 @@ class VideoPlayerApp:
         ttk.Entry(self.right_frame, textvariable=self.yaml_file_path, width=100, state="readonly").pack(anchor="w", padx=20, pady=5)
         ttk.Button(self.right_frame, text="Chọn", command=self.select_dataset_path, bootstyle="primary").pack(anchor="w", padx=20, pady=5)
 
-        # Nút bắt đầu test
-        ttk.Button(
-            self.right_frame,
+         # Nút bắt đầu test
+        self.test_button = ttk.Button(
+            self.right_frame,  # Lưu tham chiếu vào self.test_button
             text="Bắt đầu Test",
             command=self.start_testing,
             bootstyle="success-outline",
             width=20
-        ).pack(anchor="w", padx=20, pady=20)
+        )
+        self.test_button.pack(anchor="w", padx=20, pady=20)
 
         # Kết quả hiển thị
         self.result_frame = ttk.Frame(self.right_frame)
@@ -885,27 +1142,26 @@ class VideoPlayerApp:
         # Duyệt qua từng thư mục trong '../Model'
         for model_name in os.listdir(model_base_path):
             model_path = os.path.join(model_base_path, model_name)
-            if os.path.isdir(model_path):
-                if model_name == "YOLOv10":
-                    # Model chính
-                    main_model_path = os.path.join(model_path, "runs", "detect", "train", "weights", "best.pt")
-                    if os.path.exists(main_model_path):
-                        model_dirs.append(model_name)
-                        self.model_paths[model_name] = main_model_path
+            if os.path.isdir(model_path):  # Chỉ xử lý nếu là thư mục
+                # Kiểm tra nếu có file trọng số 'best.pt' trong thư mục chính
+                main_weights_path = os.path.join(model_path, "runs", "detect", "train", "weights", "best.pt")
+                if os.path.exists(main_weights_path):
+                    model_dirs.append(model_name)
+                    self.model_paths[model_name] = main_weights_path
 
-                    # Các thư mục train, train1, train2, ...
-                    for sub_dir in os.listdir(model_path):
-                        sub_dir_path = os.path.join(model_path, sub_dir)
-                        weights_path = os.path.join(sub_dir_path, "weights", "best.pt")
-                        if os.path.isdir(sub_dir_path) and os.path.exists(weights_path):
-                            combo_label = f"{model_name} - {sub_dir}"
-                            model_dirs.append(combo_label)
-                            self.model_paths[combo_label] = weights_path
+                # Duyệt qua các thư mục con (ví dụ: train, train1, train2, ...)
+                for sub_dir in os.listdir(model_path):
+                    sub_dir_path = os.path.join(model_path, sub_dir)
+                    weights_path = os.path.join(sub_dir_path, "weights", "best.pt")
+                    if os.path.isdir(sub_dir_path) and os.path.exists(weights_path):  # Xác nhận thư mục và file trọng số tồn tại
+                        # Gắn nhãn thư mục con
+                        combo_label = f"{model_name} - {sub_dir}"
+                        model_dirs.append(combo_label)
+                        self.model_paths[combo_label] = weights_path
 
-        # Gán danh sách mô hình vào ComboBox
+        # Cập nhật danh sách mô hình vào ComboBox
         self.model_combo["values"] = model_dirs
-        if model_dirs:
-            self.model_combo.current(0)  # Chọn giá trị đầu tiên mặc định
+        self.model_combo.current(0)  # Chọn giá trị mặc định đầu tiên
 
         # Liên kết sự kiện chọn mô hình
         self.model_combo.bind("<<ComboboxSelected>>", self.on_model_selected)
@@ -916,16 +1172,22 @@ class VideoPlayerApp:
         if selected_model == "Chọn mô hình":
             tk.messagebox.showinfo("Thông báo", "Vui lòng chọn một mô hình hợp lệ!")
             self.custom_model = None
+            self.model_path = None  # Xóa giá trị cũ
+            self.selected_model_name = None  # Xóa giá trị cũ
             return
 
         if selected_model in self.model_paths:
             model_path = self.model_paths[selected_model]
             try:
                 self.custom_model = YOLO(model_path)
+                self.model_path = model_path  # Lưu đường dẫn mô hình
+                self.selected_model_name = selected_model  # Lưu lại model name hiển thị
                 tk.messagebox.showinfo("Thông báo", f"Mô hình '{selected_model}' đã được tải thành công!")
             except Exception as e:
                 tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
                 self.custom_model = None
+                self.model_path = None  # Đảm bảo giá trị được đặt lại
+                self.selected_model_name = None  # Đảm bảo giá trị được đặt lại
 
     def create_copy_data_yaml(self, original_yaml_path, test_images_path):
         """Tạo file copy_data.yaml thay thế val path bằng test path."""
@@ -976,208 +1238,231 @@ class VideoPlayerApp:
 
         return {'images': images_path, 'labels': labels_path}
 
-    def read_ground_truth_boxes(self, yaml_file_path):
-        """Đọc các bounding box từ nhãn ground truth."""
-        test_paths = self.get_test_paths(yaml_file_path)
-        labels_path = test_paths['labels']
-        images_path = test_paths['images']
+    ##############################
+    # def read_ground_truth_boxes(self, yaml_file_path):
+    #     """Đọc các bounding box từ nhãn ground truth."""
+    #     test_paths = self.get_test_paths(yaml_file_path)
+    #     labels_path = test_paths['labels']
+    #     images_path = test_paths['images']
 
-        ground_truth_boxes = {}
-        for label_file in os.listdir(labels_path):
-            if not label_file.endswith('.txt'):
-                continue
+    #     ground_truth_boxes = {}
+    #     for label_file in os.listdir(labels_path):
+    #         if not label_file.endswith('.txt'):
+    #             continue
 
-            image_name = label_file.replace('.txt', '.jpg')
-            image_path = os.path.join(images_path, image_name)
+    #         image_name = label_file.replace('.txt', '.jpg')
+    #         image_path = os.path.join(images_path, image_name)
 
-            if not os.path.exists(image_path):
-                print(f"Image {image_name} not found, skipping.")
-                continue
+    #         if not os.path.exists(image_path):
+    #             print(f"Image {image_name} not found, skipping.")
+    #             continue
 
-            with Image.open(image_path) as img:
-                image_width, image_height = img.size
+    #         with Image.open(image_path) as img:
+    #             image_width, image_height = img.size
 
-            boxes = []
-            with open(os.path.join(labels_path, label_file), 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    _, x_center, y_center, width, height = map(float, parts)
+    #         boxes = []
+    #         with open(os.path.join(labels_path, label_file), 'r') as f:
+    #             for line in f:
+    #                 parts = line.strip().split()
+    #                 _, x_center, y_center, width, height = map(float, parts)
 
-                    # Chuyển đổi từ định dạng YOLO sang [x1, y1, x2, y2]
-                    x1 = (x_center - width / 2) * image_width
-                    y1 = (y_center - height / 2) * image_height
-                    x2 = (x_center + width / 2) * image_width
-                    y2 = (y_center + height / 2) * image_height
+    #                 # Chuyển đổi từ định dạng YOLO sang [x1, y1, x2, y2]
+    #                 x1 = (x_center - width / 2) * image_width
+    #                 y1 = (y_center - height / 2) * image_height
+    #                 x2 = (x_center + width / 2) * image_width
+    #                 y2 = (y_center + height / 2) * image_height
 
-                    boxes.append([x1, y1, x2, y2])
+    #                 boxes.append([x1, y1, x2, y2])
 
-            ground_truth_boxes[image_name] = boxes
+    #         ground_truth_boxes[image_name] = boxes
 
-        return ground_truth_boxes
+    #     return ground_truth_boxes
     
-    def get_predictions_from_test_set(self, yaml_file_path):
-        """Lấy bounding box dự đoán từ mô hình YOLO."""
-        test_paths = self.get_test_paths(yaml_file_path)
-        images_path = test_paths['images']
+    # def get_predictions_from_test_set(self, yaml_file_path):
+    #     """Lấy bounding box dự đoán từ mô hình YOLO."""
+    #     test_paths = self.get_test_paths(yaml_file_path)
+    #     images_path = test_paths['images']
 
-        predictions = {}
-        results = self.custom_model.predict(source=images_path, save=False)
+    #     predictions = {}
+    #     results = self.custom_model.predict(source=images_path, save=False)
 
-        for result in results:
-            image_name = os.path.basename(result.path)
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confidences = result.boxes.conf.cpu().numpy()
+    #     for result in results:
+    #         image_name = os.path.basename(result.path)
+    #         boxes = result.boxes.xyxy.cpu().numpy()
+    #         confidences = result.boxes.conf.cpu().numpy()
 
-            predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
+    #         predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
 
-        return predictions
+    #     return predictions
     
-    def calculate_miou(self, predictions, ground_truth_boxes):
-        """Tính toán mIoU giữa các dự đoán và ground truth boxes."""
-        ious = []
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # def calculate_miou(self, predictions, ground_truth_boxes):
+    #     """Tính toán mIoU giữa các dự đoán và ground truth boxes."""
+    #     ious = []
+    #     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        for image_name, gt_boxes in ground_truth_boxes.items():
-            pred_boxes = predictions.get(image_name, {}).get('boxes', [])
-            if len(pred_boxes) == 0 or len(gt_boxes) == 0:
-                continue  # Bỏ qua nếu không có bounding boxes hợp lệ
-            # Chuyển đổi sang tensor và đảm bảo định dạng (N, 4)
-            pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
-            gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
-            if pred_boxes.shape[1] != 4 or gt_boxes.shape[1] != 4:
-                continue  # Bỏ qua nếu định dạng không đúng (N, 4)
-            # Tính toán IoU
-            iou_matrix = box_iou(pred_boxes, gt_boxes)
-            # Lấy giá trị IoU lớn nhất cho mỗi box dự đoán
-            max_ious = iou_matrix.max(dim=1).values.cpu().numpy()
-            ious.extend(max_ious)
+    #     for image_name, gt_boxes in ground_truth_boxes.items():
+    #         pred_boxes = predictions.get(image_name, {}).get('boxes', [])
+    #         if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+    #             continue  # Bỏ qua nếu không có bounding boxes hợp lệ
+    #         # Chuyển đổi sang tensor và đảm bảo định dạng (N, 4)
+    #         pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
+    #         gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
+    #         if pred_boxes.shape[1] != 4 or gt_boxes.shape[1] != 4:
+    #             continue  # Bỏ qua nếu định dạng không đúng (N, 4)
+    #         # Tính toán IoU
+    #         iou_matrix = box_iou(pred_boxes, gt_boxes)
+    #         # Lấy giá trị IoU lớn nhất cho mỗi box dự đoán
+    #         max_ious = iou_matrix.max(dim=1).values.cpu().numpy()
+    #         ious.extend(max_ious)
 
-        # Tính giá trị trung bình mIoU
-        return np.mean(ious) if ious else 0
+    #     # Tính giá trị trung bình mIoU
+    #     return np.mean(ious) if ious else 0
 
-    def calculate_plate_detection_accuracy(self, predictions, ground_truth_boxes, iou_threshold=0.5):
-        """
-        Tính tỷ lệ nhận diện biển số dựa trên các khung dự đoán và nhãn ground truth.
-        """
-        try:
-            correct_detections = 0
-            total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
+    # def calculate_plate_detection_accuracy(self, predictions, ground_truth_boxes, iou_threshold=0.5):
+    #     """
+    #     Tính tỷ lệ nhận diện biển số dựa trên các khung dự đoán và nhãn ground truth.
+    #     """
+    #     try:
+    #         correct_detections = 0
+    #         total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
 
-            for image_name, gt_boxes in ground_truth_boxes.items():
-                pred_boxes = predictions.get(image_name, {}).get('boxes', [])
-                
-                # Chuyển sang tensor
-                pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32)
-                gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32)
+    #         for image_name, gt_boxes in ground_truth_boxes.items():
+    #             pred_boxes = predictions.get(image_name, {}).get('boxes', []) 
 
-                # Bỏ qua ảnh nếu không có dự đoán hoặc ground truth
-                if len(pred_boxes) == 0 or len(gt_boxes) == 0:
-                    continue
+    #             # Chuyển sang tensor
+    #             pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32)
+    #             gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32)
 
-                # Tính IoU
-                iou_matrix = box_iou(pred_boxes, gt_boxes)
-                max_ious = iou_matrix.max(dim=0).values  # Lấy giá trị IoU lớn nhất cho mỗi nhãn thực tế
+    #             # Bỏ qua ảnh nếu không có dự đoán hoặc ground truth
+    #             if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+    #                 continue
 
-                # Tính số lượng dự đoán đúng
-                correct_detections += (max_ious >= iou_threshold).sum().item()
+    #             # Tính IoU
+    #             iou_matrix = box_iou(pred_boxes, gt_boxes)
+    #             max_ious = iou_matrix.max(dim=0).values  # Lấy giá trị IoU lớn nhất cho mỗi nhãn thực tế
 
-            # Tính tỷ lệ nhận diện
-            accuracy = (correct_detections / total_plates) * 100 if total_plates > 0 else 0
-            return accuracy
+    #             # Tính số lượng dự đoán đúng
+    #             correct_detections += (max_ious >= iou_threshold).sum().item()
 
-        except Exception as e:
-            print(f"Lỗi khi tính tỷ lệ nhận diện biển số: {e}")
-            return 0
+    #         # Tính tỷ lệ nhận diện
+    #         accuracy = (correct_detections / total_plates) * 100 if total_plates > 0 else 0
+    #         return accuracy
+        
+    #     except Exception as e:
+    #         print(f"Lỗi khi tính tỷ lệ nhận diện biển số: {e}")
+    #         return 0
 
-    def calculate_average_confidence(self, predictions):
-        """
-        Tính độ tin cậy trung bình từ các bounding box dự đoán.
-        """
-        confidences = []
-        for data in predictions.values():
-            confidences.extend(data.get('confidences', []))
-        return np.mean(confidences) if confidences else 0
+    # def calculate_average_confidence(self, predictions):
+    #     """
+    #     Tính độ tin cậy trung bình từ các bounding box dự đoán.
+    #     """
+    #     confidences = []
+    #     for data in predictions.values():
+    #         confidences.extend(data.get('confidences', []))
+    #     return np.mean(confidences) if confidences else 0
 
+    #####################
     def start_testing(self):
         """Bắt đầu kiểm tra mô hình."""
-        if self.model_combo.get() == "Chọn mô hình trước tiên":
-            tk.messagebox.showerror("Lỗi", "Vui lòng chọn một mô hình trước khi bắt đầu kiểm tra!")
-            return
-
-        if not hasattr(self, 'copy_yaml_path') or not self.copy_yaml_path:
-            tk.messagebox.showerror("Lỗi", "Hãy chọn tập dữ liệu hợp lệ với file 'copy_data.yaml' đã được tạo.")
+        if not hasattr(self, "custom_model") or self.custom_model is None:
+            tk.messagebox.showerror("Lỗi", "Vui lòng chọn mô hình trước khi bắt đầu kiểm tra!")
             return
 
         yaml_file_path = self.copy_yaml_path
-
-        if not yaml_file_path or not os.path.exists(yaml_file_path):
-            tk.messagebox.showerror("Lỗi", f"Không tìm thấy tệp 'copy_data.yaml' tại: {yaml_file_path}")
+        if not yaml_file_path:
+            tk.messagebox.showerror("Lỗi", "Hãy chọn tập dữ liệu hợp lệ!")
             return
 
-        # Vô hiệu hóa nút và hiển thị trạng thái
-        self.disable_buttons()
-        self.status_label = ttk.Label(self.result_frame, text="Đang test mô hình...", font=("Arial", 14), bootstyle="info")
+        # Lấy tên mô hình và dataset
+        # Truyền tên model vào hàm test
+        model_name = self.selected_model_name  # Tên model hiển thị trên ComboBox
+        # Lấy tên dataset
+        dataset_name = os.path.basename(os.path.dirname(yaml_file_path))
+
+        # Kiểm tra kết quả trước đó
+        last_result_path = f"./TestResults/{model_name}/last_result_{dataset_name}.txt"
+        if os.path.exists(last_result_path):
+            with open(last_result_path, "r", encoding="utf-8") as f:
+                last_result = f.read()
+            if tk.messagebox.askyesno("Thông báo", "Đã có kết quả kiểm tra trước đó. Bạn có muốn hiển thị?"):
+                self.clear_result_frame()
+                ttk.Label(self.result_frame, text="Kết quả kiểm tra trước đó:", font=("Arial", 14, "bold"), bootstyle="info").pack(anchor="w", pady=10)
+                ttk.Label(self.result_frame, text=last_result, font=("Arial", 12), bootstyle="success").pack(anchor="w", pady=10)
+                return
+
+        # Nếu không có kết quả trước đó, tiến hành kiểm tra mới
+        self.clear_result_frame()
+        self.status_label = ttk.Label(self.result_frame, text="Đang kiểm tra mô hình...", font=("Arial", 14), bootstyle="info")
         self.status_label.pack(anchor="w", pady=10)
 
-        # Chạy quá trình kiểm tra trong luồng riêng
-        test_thread = threading.Thread(target=self.run_testing, args=(yaml_file_path,))
-        test_thread.start()
+        # Cấu hình tiến trình kiểm tra
+        self.test_button.config(text="Dừng", command=self.stop_testing, bootstyle="danger")
+        self.result_queue = Queue()
+        self.stop_event = Event()
 
-    def run_testing(self, yaml_file_path):
-        """
-        Thực hiện kiểm tra mô hình và cập nhật GUI khi hoàn thành.
-        """
-        try:
-            # Kiểm tra tệp YAML
-            if not os.path.exists(yaml_file_path):
-                self.status_label.config(text="Lỗi: Không tìm thấy tệp 'data.yaml'")
-                return
+        # Tạo tiến trình kiểm tra mới
+        self.test_process = Process(
+            target=run_testing_process,
+            args=(self.model_path, yaml_file_path, self.result_queue, self.stop_event, model_name)  # Truyền model_name vào đây
+        )
+        self.test_process.start()
+        self.check_testing_status()
 
-            # Kiểm tra mô hình
-            if not hasattr(self, 'custom_model') or self.custom_model is None:
-                self.status_label.config(text="Lỗi: Mô hình chưa được chọn.")
-                return
+    def stop_testing(self):
+        """Dừng tiến trình kiểm tra."""
+        if hasattr(self, "test_process") and isinstance(self.test_process, multiprocessing.Process):
+            if self.test_process.is_alive():
+                # Gửi tín hiệu dừng
+                self.stop_event.set()
+                # Chờ tiến trình xử lý tín hiệu và dừng an toàn
+                self.test_process.join(timeout=3)
+                # Kiểm tra nếu tiến trình vẫn chạy, dùng terminate
+                if self.test_process.is_alive():
+                    self.test_process.terminate()
+                    self.test_process.join()
+        # Cập nhật lại nút và trạng thái giao diện
+        self.test_button.config(text="Bắt đầu Test", bootstyle="success-outline")
+        self.enable_buttons()
+        tk.messagebox.showinfo("Thông báo", "Quá trình kiểm tra đã dừng.")
 
-            # Tính mAP bằng model.val()
-            results = self.custom_model.val(data=yaml_file_path, save_json=True)
-            mAP_50 = results.box.map50
-            mAP_50_95 = results.box.map
-
-            # Đọc ground truth và dự đoán
-            ground_truth_boxes = self.read_ground_truth_boxes(yaml_file_path)
-            predictions = self.get_predictions_from_test_set(yaml_file_path)
-
-            # Tính các thông số bổ sung
-            mIoU = self.calculate_miou(predictions, ground_truth_boxes)
-            plate_detection_accuracy = self.calculate_plate_detection_accuracy(predictions, ground_truth_boxes)
-            average_confidence = self.calculate_average_confidence(predictions)
-
-            # Tạo kết quả
-            result_text = (
-                f"Kết quả kiểm tra mô hình:\n"
-                f"--------------------------\n"
-                f"mAP@0.5: {mAP_50:.4f}\n"
-                f"mAP@0.5:0.95: {mAP_50_95:.4f}\n"
-                f"mIoU: {mIoU:.4f}\n"
-                f"Độ tin cậy trung bình: {average_confidence:.2f}\n"
-                f"Tỷ lệ nhận diện biển số: {plate_detection_accuracy:.2f}%\n"
-            )
-
-            # Cập nhật GUI
-            self.status_label.config(text=result_text, bootstyle="success")
-
-        except Exception as e:
-            # Hiển thị lỗi trên GUI
-            self.status_label.config(text=f"Lỗi khi kiểm tra mô hình: {e}", bootstyle="danger")
-
-        finally:
-            # Kích hoạt lại các nút
+    def check_testing_status(self):
+        """Kiểm tra trạng thái tiến trình kiểm tra."""
+        if not self.result_queue.empty():
+            status, message = self.result_queue.get()
+            if status == "completed":
+                dataset_name = os.path.basename(os.path.dirname(self.copy_yaml_path))
+                save_test_results(self.model_combo.get(), dataset_name, message)
+                self.status_label.config(text=message, bootstyle="success")
+            elif status == "stopped":
+                # Hiển thị kết quả trước đó nếu có
+                model_name = self.selected_model_name
+                dataset_name = os.path.basename(os.path.dirname(self.copy_yaml_path))
+                last_result_path = f"./TestResults/{model_name}/last_result_{dataset_name}.txt"
+                if os.path.exists(last_result_path):
+                    with open(last_result_path, "r", encoding="utf-8") as f:
+                        last_result = f.read()
+                    self.status_label.config(text="Hiển thị kết quả kiểm tra trước đó:", bootstyle="info")
+                    ttk.Label(self.result_frame, text=last_result, font=("Arial", 12), bootstyle="success").pack(anchor="w", pady=10)
+                else:
+                    self.status_label.config(text="Quá trình kiểm tra bị dừng. Không có kết quả được lưu trước đó để hiển thị.", bootstyle="warning")
+            elif status == "error":
+                self.status_label.config(text=message, bootstyle="danger")
+            self.test_button.config(text="Bắt đầu Test", command=self.start_testing, bootstyle="success-outline")
+            self.enable_buttons()
+            return
+        if self.test_process.is_alive():
+            self.root.after(100, self.check_testing_status)
+        else:
+            self.status_label.config(text="Tiến trình kiểm tra đã kết thúc.", bootstyle="info")
+            self.test_button.config(text="Bắt đầu Test", command=self.start_testing, bootstyle="success-outline")
             self.enable_buttons()
 
-    def disable_buttons(self):
-        """Đóng băng tất cả các nút trong giao diện."""
+    def disable_buttons(self, exclude_buttons=None):
+        """Vô hiệu hóa tất cả các nút trong giao diện, trừ các nút được chỉ định."""
+        if exclude_buttons is None:
+            exclude_buttons = []
         for widget in self.right_frame.winfo_children():
-            if isinstance(widget, ttk.Button):
+            if isinstance(widget, ttk.Button) and widget not in exclude_buttons:
                 widget.config(state="disabled")
 
     def enable_buttons(self):
@@ -1186,11 +1471,10 @@ class VideoPlayerApp:
             if isinstance(widget, ttk.Button):
                 widget.config(state="normal")
 
-
-    # def clear_results(self):
-    #     """Xóa nội dung hiển thị kết quả trong result_frame."""
-    #     for widget in self.result_frame.winfo_children():
-    #         widget.destroy()
+    def clear_result_frame(self):
+        """Xóa nội dung cũ trong khung kết quả."""
+        for widget in self.result_frame.winfo_children():
+            widget.destroy()
 
     ##################################
     ###### Xóa nội dung right frame khi bấm sang button mới bên khung left frame

@@ -1,0 +1,9 @@
+Kết quả đã được lưu tại: ./TestResults/YOLOv10\YOLOv10_BienSoXe_02-33-24_08-12-2024.txt
+Kết quả kiểm tra mô hình:
+Tên mô hình: YOLOv10
+Dataset: BienSoXe
+mAP@0.5: 0.9554
+mAP@0.5:0.95: 0.7082
+mIoU: 0.6981
+Độ tin cậy trung bình: 0.86
+Tỷ lệ nhận diện biển số: 96.00%
