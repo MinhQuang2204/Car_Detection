@@ -1,4 +1,4 @@
-Kết quả đã được lưu tại: ./TestResults/YOLOv10\YOLOv10_BienSoXe_02-33-24_08-12-2024.txt
+Kết quả đã được lưu tại: ./TestResults/YOLOv10\YOLOv10_BienSoXe_15-13-45_19-12-2024.txt
 Kết quả kiểm tra mô hình:
 Tên mô hình: YOLOv10
 Dataset: BienSoXe

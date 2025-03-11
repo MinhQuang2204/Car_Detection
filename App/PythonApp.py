@@ -12,7 +12,7 @@ import cv2
 from PIL import Image, ImageTk
 
 #### import thư viện YOLO và paddleocr
-from ultralytics import YOLO
+from ultralytics import YOLO, RTDETR
 from paddleocr import PaddleOCR, draw_ocr
 
 # #### Xử lý thread
@@ -24,6 +24,7 @@ import concurrent.futures
 #### Các thư viện khác
 import os
 import pandas as pd
+import re
 import yaml
 import shutil
 import random
@@ -36,6 +37,10 @@ import torch
 
 # Thư viện hỗ trợ các phép tính và đọc dữ liệu
 from torchvision.ops import box_iou
+
+# Tải mô hình KNN và LabelEncoder
+from sklearn.neighbors import KNeighborsClassifier
+import joblib
 
 ### Khởi tạo YOLO model
 #model = YOLO('../Model/Models_yolov10n_dataBienSoNhieuLoaiv4_datanoscale_anhmau1nhan/runs/detect/train/weights/best.pt')
@@ -62,6 +67,25 @@ def train_yolov10(stop_event, data_yaml_path, output_dir, batch_size, epochs):
     except Exception as e:
         print(f"Lỗi khi huấn luyện YOLOv10: {e}")
 
+############################################################################################################################
+def train_rtdetr(stop_event, data_yaml_path, output_dir, batch_size, epochs):
+    """Huấn luyện mô hình RT-DETR."""
+    try:
+        model = RTDETR('rtdetr-l.pt')  # Tải mô hình RT-DETR với pre-trained weights
+        model.train(
+            data=data_yaml_path,
+            epochs=epochs,
+            batch=batch_size,
+            imgsz=640,
+            patience=10,
+            project=output_dir,
+        )
+        if stop_event.is_set():
+            print("Quá trình huấn luyện RT-DETR đã bị dừng.")
+    except Exception as e:
+        print(f"Lỗi khi huấn luyện RT-DETR: {e}")        
+##########################################################################################################################
+
 def train_other_model(stop_event, data_yaml_path, output_dir, batch_size, epochs):
     """Huấn luyện cho các mô hình khác (placeholder)."""
     try:
@@ -71,6 +95,7 @@ def train_other_model(stop_event, data_yaml_path, output_dir, batch_size, epochs
             print("Quá trình huấn luyện mô hình khác đã bị dừng.")
     except Exception as e:
         print(f"Lỗi khi huấn luyện mô hình khác: {e}")
+        
 ###################################
 def run_testing_process(model_path, yaml_file_path, result_queue, stop_event, display_model_name):
     """
@@ -83,12 +108,19 @@ def run_testing_process(model_path, yaml_file_path, result_queue, stop_event, di
         display_model_name (str): Tên hiển thị của mô hình trên ComboBox.
     """
     try:
-        # Tải mô hình YOLO
+        # Xác định mô hình dựa trên tên
+        if "RT-DETR" in display_model_name:
+            model = RTDETR(model_path)  # Sử dụng RT-DETR
+        elif "YOLOv10" in display_model_name:
+            model = YOLO(model_path)  # Sử dụng YOLOv10
+        else:
+            result_queue.put(("error", f"Mô hình '{display_model_name}' không được hỗ trợ."))
+            return
+
         if stop_event.is_set():
             result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng trước khi bắt đầu."))
             return
-        
-        model = YOLO(model_path)
+
         # Chạy kiểm tra trong một tiến trình phụ
         def run_model_val():
             return model.val(data=yaml_file_path, save_json=True)
@@ -318,6 +350,14 @@ class VideoPlayerApp:
         self.frame_delay = 15  # Điều chỉnh thời gian delay giữa các frame (ms)
         self.ocr = None #PaddleOCR(lang='en')  # Khởi tạo OCR
 
+        self.knn_model = None
+        self.knn_label_encoders = None
+        try:
+            self.knn_model = joblib.load("../KNN_Models/knn_multi_output_biensoxe.pkl")
+            self.knn_label_encoders = joblib.load("../KNN_Models/label_encoders_knn.pkl")
+        except Exception as e:
+            print("⚠️ Không thể load mô hình KNN hoặc label encoders:", e)
+
         self.train_process = None  # Tiến trình huấn luyện
         self.test_process = None    # Tiến trình kiểm tra (test)
         self.stop_event = multiprocessing.Event()  # Sự kiện dừng tiến trình
@@ -418,12 +458,12 @@ class VideoPlayerApp:
         home_label.pack(side="left")
 
         # Tiêu đề chính
-        title_label = ttk.Label(self.right_frame, text="Tiểu Luận Chuyên Ngành", font=("Arial", 24, "bold"), bootstyle="success")
+        title_label = ttk.Label(self.right_frame, text="Khóa Luận Tốt Nghiệp", font=("Arial", 24, "bold"), bootstyle="success")
         title_label.pack(pady=(20, 10))
 
         # Phụ đề
         subtitle_label = ttk.Label(
-            self.right_frame, text="Tìm Hiểu Bài Toán Nhận Diện Biển Số Xe Qua Camera Giao Thông", font=("Arial", 16), bootstyle="secondary"
+            self.right_frame, text="Nhận diện biển số xe bằng mô hình Real Time Detection Transformers (RT-DETR)", font=("Arial", 16), bootstyle="secondary"
         )
         subtitle_label.pack(pady=(0, 20))
 
@@ -550,7 +590,7 @@ class VideoPlayerApp:
         self.model_combo = ttk.Combobox(
             self.right_frame,
             textvariable=self.selected_model,
-            values=["YOLOv10",],  # Danh sách mô hình YOLO
+            values=["YOLOv10", "RT-DETR"],  # Danh sách mô hình YOLO
             state="readonly",
             width=50,
         )
@@ -851,6 +891,11 @@ class VideoPlayerApp:
                 target=train_yolov10,
                 args=(self.stop_event, data_yaml_path, output_dir, 16, 120) # train với batch size và số epochs
             )
+        elif selected_model == "RT-DETR":
+            self.train_process = multiprocessing.Process(
+                target=train_rtdetr,
+                args=(self.stop_event, data_yaml_path, output_dir, 16, 120)
+            )    
         else:
             tk.messagebox.showerror("Lỗi", f"Mô hình '{selected_model}' chưa được hỗ trợ.")
             return
@@ -978,9 +1023,10 @@ class VideoPlayerApp:
     #         self.calculate_results()
 
     def calculate_results(self):
-        """Tính toán kết quả từ mô hình đã chọn, đảm bảo thông tin hiển thị ngay cả khi thiếu cột 'time'."""
+        """Tính toán kết quả từ mô hình đã chọn, hỗ trợ YOLOv10 và RT-DETR."""
         selected_model = self.model_dir_var.get()
-         # Kiểm tra nếu người dùng chưa chọn mô hình
+
+        # Kiểm tra nếu người dùng chưa chọn mô hình
         if not selected_model or selected_model == "Chọn mô hình":
             tk.messagebox.showerror("Lỗi", "Hãy chọn một mô hình hợp lệ từ danh sách.")
             return
@@ -1002,7 +1048,6 @@ class VideoPlayerApp:
         # Đọc file results.csv
         try:
             data = pd.read_csv(results_file)
-            # Chuẩn hóa tên cột
             data.columns = data.columns.str.strip()
         except pd.errors.EmptyDataError:
             self.clear_results()
@@ -1013,20 +1058,28 @@ class VideoPlayerApp:
             ttk.Label(self.result_frame, text=f"Lỗi khi đọc file results.csv: {e}", bootstyle="danger").pack(pady=10)
             return
 
+        # Xác định mô hình dựa vào cột trong results.csv
+        if 'train/box_loss' in data.columns:
+            model_type = "YOLOv10"
+            train_loss_columns = ['train/box_loss', 'train/cls_loss', 'train/dfl_loss']
+            val_loss_columns = ['val/box_loss', 'val/cls_loss', 'val/dfl_loss']
+        elif 'train/giou_loss' in data.columns:
+            model_type = "RT-DETR"
+            train_loss_columns = ['train/giou_loss', 'train/cls_loss', 'train/l1_loss']
+            val_loss_columns = ['val/giou_loss', 'val/cls_loss', 'val/l1_loss']
+        else:
+            self.clear_results()
+            ttk.Label(self.result_frame, text="Không xác định được mô hình từ file results.csv.", bootstyle="danger").pack(pady=10)
+            return
+
         # Kiểm tra các cột cần thiết
-        required_columns = [
-            'train/box_loss', 'train/cls_loss', 'train/dfl_loss',
-            'val/box_loss', 'val/cls_loss', 'val/dfl_loss',
+        required_columns = train_loss_columns + val_loss_columns + [
             'metrics/precision(B)', 'metrics/recall(B)', 'metrics/mAP50(B)', 'metrics/mAP50-95(B)'
         ]
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
             self.clear_results()
-            ttk.Label(
-                self.result_frame,
-                text=f"Thiếu các cột dữ liệu sau trong results.csv: {', '.join(missing_columns)}",
-                bootstyle="danger"
-            ).pack(pady=10)
+            ttk.Label(self.result_frame, text=f"Thiếu các cột dữ liệu sau: {', '.join(missing_columns)}", bootstyle="danger").pack(pady=10)
             return
 
         # Xử lý thiếu cột 'time'
@@ -1034,8 +1087,8 @@ class VideoPlayerApp:
 
         # Tính toán train_loss, val_loss, object_accuracy
         try:
-            data['train_loss'] = data['train/box_loss'] + data['train/cls_loss'] + data['train/dfl_loss']
-            data['val_loss'] = data['val/box_loss'] + data['val/cls_loss'] + data['val/dfl_loss']
+            data['train_loss'] = data[train_loss_columns].sum(axis=1)
+            data['val_loss'] = data[val_loss_columns].sum(axis=1)
             data['object_accuracy'] = 2 * (data['metrics/precision(B)'] * data['metrics/recall(B)']) / (
                 data['metrics/precision(B)'] + data['metrics/recall(B)']
             )
@@ -1077,6 +1130,7 @@ class VideoPlayerApp:
         # Hiển thị kết quả trong result_frame
         ttk.Label(self.result_frame, text="Kết quả mô hình sau khi huấn luyện:", font=("Arial", 18, "bold"), bootstyle="success").pack(anchor="w", pady=10)
         result_text = (
+            f"Mô hình: {model_type}\n"
             f"Đường dẫn mô hình: {model_dir}\n"
             f"Số Epochs: {int(best_epoch['epoch'])}\n"
             f"Thời gian huấn luyện tại epoch tốt nhất: {formatted_time}\n"
@@ -1179,15 +1233,21 @@ class VideoPlayerApp:
         if selected_model in self.model_paths:
             model_path = self.model_paths[selected_model]
             try:
-                self.custom_model = YOLO(model_path)
-                self.model_path = model_path  # Lưu đường dẫn mô hình
-                self.selected_model_name = selected_model  # Lưu lại model name hiển thị
+                if "RT-DETR" in selected_model:
+                    self.custom_model = RTDETR(model_path)  # Sử dụng RT-DETR nếu tên chứa "RT-DETR"
+                elif "YOLOv10" in selected_model:
+                    self.custom_model = YOLO(model_path)  # Sử dụng YOLO nếu tên chứa "YOLOv10"
+                else:
+                    raise ValueError("Mô hình không hợp lệ!")
+
+                self.model_path = model_path
+                self.selected_model_name = selected_model
                 tk.messagebox.showinfo("Thông báo", f"Mô hình '{selected_model}' đã được tải thành công!")
             except Exception as e:
                 tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
                 self.custom_model = None
-                self.model_path = None  # Đảm bảo giá trị được đặt lại
-                self.selected_model_name = None  # Đảm bảo giá trị được đặt lại
+                self.model_path = None
+                self.selected_model_name = None
 
     def create_copy_data_yaml(self, original_yaml_path, test_images_path):
         """Tạo file copy_data.yaml thay thế val path bằng test path."""
@@ -1496,6 +1556,63 @@ class VideoPlayerApp:
     ######################################################
     ######################################################
 
+    def predict_bien_so_info_knn(self, ocr_text):
+        try:
+            if not self.knn_model or not self.knn_label_encoders:
+                return {"Tên tỉnh/Thành phố": "Không rõ", "Địa danh": "Không rõ", "Loại xe": "Không rõ", "Chi tiết loại xe": "Không rõ"}
+
+            # Hàm rút gọn từ chuyen_doi_bien_so_lookup_v3
+            bien_so = str(ocr_text).strip().replace("-", "").upper()
+
+            # Load bảng lookup
+            lookup_df = pd.read_csv("../KNN_Models/ma_tinh_ma_huyen_lookup.csv", encoding="utf-8-sig")
+            lookup_df["Mã tỉnh/Mã cơ quan"] = lookup_df["Mã tỉnh/Mã cơ quan"].str.replace("-", "", regex=False)
+            valid_ma_tinh_list = sorted(lookup_df["Mã tỉnh/Mã cơ quan"].dropna().unique().tolist(), key=lambda x: -len(x))
+
+            # Tách mã tỉnh
+            matched_ma_tinh = next((ma for ma in valid_ma_tinh_list if bien_so.startswith(ma)), "")
+            phan_con_lai = bien_so[len(matched_ma_tinh):]
+
+            # Tách mã huyện
+            ma_huyen_list = lookup_df[lookup_df["Mã tỉnh/Mã cơ quan"] == matched_ma_tinh]["Mã huyện/Mã loại xe"].dropna().astype(str).str.upper().tolist()
+            ma_huyen_list = sorted(ma_huyen_list, key=lambda x: -len(x))
+            matched_ma_huyen = next((mh for mh in ma_huyen_list if phan_con_lai.startswith(mh)), "")
+            phan_con_lai_sau_huyen = phan_con_lai[len(matched_ma_huyen):]
+            seri = re.search(r"\d{3,5}", phan_con_lai_sau_huyen)
+            seri = seri.group(0) if seri else "0"
+
+            # Mã hóa
+            chu = ''.join(re.findall(r"[A-Z]+", matched_ma_tinh))
+            so = ''.join(re.findall(r"\d+", matched_ma_tinh))
+            ma_tinh_num = sum(ord(c) - ord('A') + 1 for c in chu) * 1000
+            if so:
+                ma_tinh_num += int(so)
+            if not matched_ma_tinh.isdigit():
+                ma_tinh_num += 10000
+            if matched_ma_huyen == "":
+                ma_huyen_num = 0
+            elif re.match(r"^[A-Z]{1,2}$", matched_ma_huyen) or re.match(r"^[A-Z][0-9]$", matched_ma_huyen):
+                ma_huyen_num = sum((ord(c) - ord('A') + 1) * 26**i for i, c in enumerate(reversed(matched_ma_huyen))) * 1000
+            else:
+                ma_huyen_num = 0
+            so_xe = int(seri) if seri.isdigit() else 0
+
+            bien_so_num = ma_tinh_num * 1000000000 + ma_huyen_num * 1000 + so_xe
+
+            # Dự đoán
+            X_test = pd.DataFrame({"Biển Số": [bien_so_num]})
+            pred_labels = self.knn_model.predict(X_test)[0]
+            result = {
+                "Tên tỉnh/Thành phố": self.knn_label_encoders["Tên tỉnh/Thành phố/Tên cơ quan"].inverse_transform([pred_labels[0]])[0],
+                "Địa danh": self.knn_label_encoders["Địa danh"].inverse_transform([pred_labels[1]])[0],
+                "Loại xe": self.knn_label_encoders["Loại xe"].inverse_transform([pred_labels[2]])[0],
+                "Chi tiết loại xe": self.knn_label_encoders["Chi tiết loại xe"].inverse_transform([pred_labels[3]])[0]
+            }
+            return result
+        except Exception as e:
+            print(f"Lỗi dự đoán từ OCR KNN: {e}")
+            return {"Tên tỉnh/Thành phố": "Không rõ", "Địa danh": "Không rõ", "Loại xe": "Không rõ", "Chi tiết loại xe": "Không rõ"}
+
     def show_detect_content(self):
         """Hiển thị nội dung hiện tại của Detect video và ảnh."""
         self.clear_right_frame()
@@ -1611,7 +1728,13 @@ class VideoPlayerApp:
         if selected_model in self.detect_model_paths:
             model_path = self.detect_model_paths[selected_model]
             try:
-                self.detect_model = YOLO(model_path)
+                # Xác định mô hình dựa trên tên chứa "YOLOv10" hoặc "RT-DETR"
+                if "RT-DETR" in selected_model:
+                    self.detect_model = RTDETR(model_path)  # Sử dụng RT-DETR
+                elif "YOLOv10" in selected_model:
+                    self.detect_model = YOLO(model_path)  # Sử dụng YOLOv10
+                else:
+                    raise ValueError("Không xác định được loại mô hình!")
                 tk.messagebox.showinfo("Thông báo", f"Mô hình '{selected_model}' đã được tải thành công!")
             except Exception as e:
                 tk.messagebox.showerror("Lỗi", f"Lỗi khi tải mô hình: {e}")
@@ -1889,9 +2012,51 @@ class VideoPlayerApp:
 
             # Hiển thị thông tin OCR
             ocr_text = data.get('ocr_text', '')
+
+            ocr_cleaned = re.sub(r'[^A-Za-z0-9]', '', ocr_text)
+
+            # --- Kiểm tra độ dài clean_ocr ---
+            if len(ocr_cleaned) < 6:
+                knn_info = {
+                    "Tên tỉnh/Thành phố": "Không xác định",
+                    "Địa danh": "Không xác định",
+                    "Loại xe": "Không xác định",
+                    "Chi tiết loại xe": "Không xác định"
+                }
+            else:
+                try:
+                    knn_info = self.predict_bien_so_info_knn(ocr_cleaned)                     
+                    if not isinstance(knn_info, dict):  # Nếu trả về lỗi chuỗi
+                        knn_info = {
+                            "Tên tỉnh/Thành phố": "Không xác định",
+                            "Địa danh": "Không xác định",
+                            "Loại xe": "Không xác định",
+                            "Chi tiết loại xe": "Không xác định"
+                        }
+                except Exception as e:
+                    knn_info = {
+                        "Tên tỉnh/Thành phố": "Không xác định",
+                        "Địa danh": "Không xác định",
+                        "Loại xe": "Không xác định",
+                        "Chi tiết loại xe": "Không xác định"
+                    }
+
+            # # Gọi dự đoán KNN từ OCR text
+            # knn_info = self.predict_bien_so_info_knn(ocr_cleaned)
+
             label_info = tk.Label(
                 self.scrollable_frame,
-                text=f"Đối tượng: {data['class_name']} - Độ tin cậy: {data['confidence']:.2f}\nOCR: {ocr_text}",
+                #text=f"Đối tượng: {data['class_name']} - Độ tin cậy: {data['confidence']:.2f}\nOCR: {ocr_text}",
+                text=(
+                    f"Đối tượng: {data['class_name']}\n"
+                    f"Độ tin cậy: {data['confidence']:.2f}\n"
+                    f"OCR: {ocr_text}\n"
+                    f"Kết quả KNN:\n"
+                    f"  - Tỉnh/Thành phố: {knn_info['Tên tỉnh/Thành phố']}\n"
+                    f"  - Địa danh: {knn_info['Địa danh']}\n"
+                    f"  - Loại xe: {knn_info['Loại xe']}\n"
+                    f"  - Chi tiết loại xe: {knn_info['Chi tiết loại xe']}"
+                ),
                 bg="#d3d3d3",
                 wraplength=500,
                 justify="left"
