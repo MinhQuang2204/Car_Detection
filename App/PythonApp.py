@@ -147,7 +147,7 @@ def run_testing_process(model_path, yaml_file_path, result_queue, stop_event, di
         dataset_name = os.path.basename(os.path.dirname(yaml_file_path))
         # Tính các chỉ số bổ sung
         ground_truth_boxes = read_ground_truth_boxes(yaml_file_path)
-        predictions = get_predictions_from_test_set(model, yaml_file_path)
+        predictions, fps = get_predictions_from_test_set(model, yaml_file_path)
 
         if stop_event.is_set():
             result_queue.put(("stopped", "Tiến trình kiểm tra đã bị dừng sau khi lấy dự đoán."))
@@ -166,6 +166,7 @@ def run_testing_process(model_path, yaml_file_path, result_queue, stop_event, di
             f"mIoU: {mIoU:.4f}\n"
             f"Độ tin cậy trung bình: {average_confidence:.2f}\n"
             f"Tỷ lệ nhận diện biển số: {plate_detection_accuracy:.2f}%\n"
+            f"FPS trung bình: {fps:.2f}\n"
         )
         result_file = save_test_results(display_model_name, dataset_name, result_text)
         if stop_event.is_set():
@@ -206,14 +207,44 @@ def read_ground_truth_boxes(yaml_file_path):
         ground_truth_boxes[image_name] = boxes
     return ground_truth_boxes
 
+# def get_predictions_from_test_set(model, yaml_file_path):
+#     """Lấy bounding box dự đoán từ mô hình YOLO."""
+#     test_paths = get_test_paths(yaml_file_path)
+#     images_path = test_paths['images']
+
+#     predictions = {}
+#     results = model.predict(source=images_path, save=False)
+
+#     for result in results:
+#         image_name = os.path.basename(result.path)
+#         boxes = result.boxes.xyxy.cpu().numpy()
+#         confidences = result.boxes.conf.cpu().numpy()
+
+#         predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
+
+#     return predictions
+
 def get_predictions_from_test_set(model, yaml_file_path):
     """Lấy bounding box dự đoán từ mô hình YOLO."""
     test_paths = get_test_paths(yaml_file_path)
     images_path = test_paths['images']
 
     predictions = {}
+    image_files = sorted(os.listdir(images_path))
+
+    # Bắt đầu đo thời gian
+    start_time = time.time()
+
+    # Chạy dự đoán
     results = model.predict(source=images_path, save=False)
 
+    # Kết thúc đo thời gian
+    end_time = time.time()
+    total_time = end_time - start_time
+    total_frames = len(image_files)
+    fps = total_frames / total_time if total_time > 0 else 0
+
+    # Lưu vào predictions
     for result in results:
         image_name = os.path.basename(result.path)
         boxes = result.boxes.xyxy.cpu().numpy()
@@ -221,7 +252,8 @@ def get_predictions_from_test_set(model, yaml_file_path):
 
         predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
 
-    return predictions
+    # Trả về predictions kèm theo thông tin FPS
+    return predictions, fps
 
 def calculate_miou(predictions, ground_truth_boxes):
     """Tính toán mIoU giữa các dự đoán và ground truth boxes."""
@@ -347,7 +379,14 @@ class VideoPlayerApp:
         self.paused = True
         self.replay_flag = False
         self.current_frame = None
-        self.frame_delay = 15  # Điều chỉnh thời gian delay giữa các frame (ms)
+        #self.frame_delay = 15  # Điều chỉnh thời gian delay giữa các frame (ms)
+        self.delay_enabled = False
+        self.frame_delay = 10
+
+        # Xử lý khi skip frame
+        self.frame_counter = 0
+        self.skip_frame_interval = 5  # Mặc định xử lý 1 frame sau mỗi 5 frame
+
         self.ocr = None #PaddleOCR(lang='en')  # Khởi tạo OCR
 
         self.knn_model = None
@@ -1666,6 +1705,29 @@ class VideoPlayerApp:
         self.btn_replay = tk.Button(self.control_frame, image=self.replay_icon, command=self.replay_video)
         self.btn_replay.pack(side=tk.LEFT, padx=10)
 
+        # Nút delay
+        self.delay_icon = ImageTk.PhotoImage(Image.open("./img/delay.png").resize((30, 30), Image.LANCZOS))
+        self.delay_on_icon = ImageTk.PhotoImage(Image.open("./img/delay_on.png").resize((30, 30), Image.LANCZOS))
+
+        self.btn_delay_toggle = tk.Button(self.control_frame, image=self.delay_icon, command=self.toggle_delay_mode, bd=0, bg="#d3d3d3")
+        self.btn_delay_toggle.pack(side=tk.LEFT, padx=10)
+
+        ### Thanh cuộn với chức năng "Skip frame"
+        # Label "Skip Frame"
+        ttk.Label(self.top_controls, text="Skip Frame:", bootstyle="info").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        # Biến liên kết scale
+        self.skip_var = IntVar(value=self.skip_frame_interval)
+        # Thanh kéo chỉnh số lượng frame bị skip
+        self.skip_frame_scale = ttk.Scale(self.top_controls, from_=1, to=30, orient="horizontal", length=300, variable=self.skip_var,
+            command=self.update_skip_frame,
+            bootstyle="danger"
+        )
+        self.skip_frame_scale.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        # Nhãn hiển thị số skip hiện tại
+        self.skip_label = ttk.Label(self.top_controls, text=f"Xử lý mỗi {self.skip_var.get()} frame", bootstyle="secondary")
+        self.skip_label.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        ###
+
         # Khung hiển thị kết quả (Thanh cuộn) bên phải
         self.result_frame = tk.Frame(self.right_frame, bg="#d3d3d3", width=300)  # Đặt chiều rộng cho khung phải
         self.result_frame.pack(side=tk.LEFT, fill=tk.Y, expand=False, padx=10)
@@ -1684,6 +1746,21 @@ class VideoPlayerApp:
 
         self.canvas_results.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
+
+    #hàm cho chức năng deay của nút delay
+    def toggle_delay_mode(self):
+        self.delay_enabled = not self.delay_enabled
+
+        if self.delay_enabled:
+            self.frame_delay = 15
+            self.btn_delay_toggle.config(image=self.delay_on_icon, bg="#d1f2eb")
+        else:
+            self.frame_delay = 10
+            self.btn_delay_toggle.config(image=self.delay_icon, bg="#d3d3d3")
+
+    def update_skip_frame(self, event=None):
+        self.skip_frame_interval = max(1, self.skip_var.get())  # đảm bảo >= 1
+        self.skip_label.config(text=f"Xử lý mỗi {self.skip_frame_interval} frame")
 
     def populate_detect_model_combo(self):
         """Điền danh sách các mô hình vào ComboBox từ thư mục '../Model'."""
@@ -1751,6 +1828,7 @@ class VideoPlayerApp:
             filetypes=[("Media files", "*.gif;*.mp4;*.avi;*.mov;*.jpg;*.jpeg;*.png")]
         )
         if self.media_path:
+            self.frame_counter = 0 
             if self.media_path.lower().endswith(('.gif','.mp4', '.avi', '.mov')):
                 # Nếu là video
                 self.video_path = self.media_path
@@ -2082,24 +2160,53 @@ class VideoPlayerApp:
         return ocr_text.strip()  # Trả về chuỗi văn bản OCR đã được trích xuất
 
 
+    # def show_frame(self):
+    #     if self.video_playing() and not self.paused:
+    #         ret, frame = self.video_cap.read()
+    #         if ret:
+    #             # Tạo bản sao của frame gốc để cắt ảnh
+    #             original_frame = frame.copy()
+
+    #             # Phát hiện đối tượng và chạy OCR
+    #             detections = self.process_frame(original_frame)  # Phát hiện đối tượng trên frame gốc
+
+    #             # Cập nhật hình ảnh đã vẽ lên Canvas
+    #             processed_frame = self.draw_detections(frame, detections)  # Vẽ bounding box, nhãn, OCR
+
+    #             # Hiển thị hình ảnh lên Canvas
+    #             self.update_canvas_image(processed_frame)
+
+    #             # Hiển thị các ảnh cắt ra trong khung cuộn
+    #             self.display_detected_images(detections)
+
+    #             # Tiếp tục hiển thị frame tiếp theo sau khoảng delay
+    #             self.root.after(self.frame_delay, self.show_frame)
+    #         else:
+    #             # Xử lý khi video kết thúc
+    #             if self.replay_flag:
+    #                 self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    #                 self.show_frame()
+
     def show_frame(self):
         if self.video_playing() and not self.paused:
             ret, frame = self.video_cap.read()
             if ret:
-                # Tạo bản sao của frame gốc để cắt ảnh
-                original_frame = frame.copy()
+                # Tạo bộ đếm frame nếu chưa có
+                if not hasattr(self, 'frame_counter'):
+                    self.frame_counter = 0
+                self.frame_counter += 1
 
-                # Phát hiện đối tượng và chạy OCR
-                detections = self.process_frame(original_frame)  # Phát hiện đối tượng trên frame gốc
-
-                # Cập nhật hình ảnh đã vẽ lên Canvas
-                processed_frame = self.draw_detections(frame, detections)  # Vẽ bounding box, nhãn, OCR
+                # Kiểm tra xem có xử lý frame này hay không
+                if self.frame_counter % self.skip_frame_interval == 0:
+                    original_frame = frame.copy()
+                    detections = self.process_frame(original_frame)  # Phát hiện đối tượng trên frame gốc
+                    processed_frame = self.draw_detections(frame, detections)  # Vẽ bounding box, nhãn, OCR
+                    self.display_detected_images(detections)
+                else:
+                    processed_frame = frame  # Không xử lý gì, chỉ hiển thị
 
                 # Hiển thị hình ảnh lên Canvas
                 self.update_canvas_image(processed_frame)
-
-                # Hiển thị các ảnh cắt ra trong khung cuộn
-                self.display_detected_images(detections)
 
                 # Tiếp tục hiển thị frame tiếp theo sau khoảng delay
                 self.root.after(self.frame_delay, self.show_frame)
@@ -2157,6 +2264,7 @@ class VideoPlayerApp:
     def replay_video(self):
         if self.video_cap is not None:
             self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Đặt lại video về frame đầu tiên
+            self.frame_counter = 0 
             self.replay_flag = True
             self.paused = False  # Đảm bảo trạng thái không bị tạm dừng
             self.btn_play_pause.config(image=self.pause_icon)  # Cập nhật nút sang trạng thái Pause
@@ -2176,3 +2284,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = VideoPlayerApp(root)
     root.mainloop()
+
+## việc không để delay là không hiệu quả do cần phải xử lý detect và vẽ hiển thị frame và các phần detect lên canvas video, 
+# còn cả phần hiển thị chi tiết phần detect của biển số xe lên khung bên phải nên cần để delay, khoảng delay thấp nhất 
+# khi thực hiện trên máy có GPU của nhóm là NVIDIA RTX 3050 Laptop cần delay là 10ms để cho ra kết quả mượt
