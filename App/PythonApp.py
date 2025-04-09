@@ -30,6 +30,7 @@ import shutil
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 
 # Thư viện xử lý toán học và mảng
 import numpy as np
@@ -741,6 +742,11 @@ class VideoPlayerApp:
 
         return train_test_ratio, valid_ratio, train_ratio
 
+    def clear_folder(self, folder_path):
+        if os.path.exists(folder_path):
+            shutil.rmtree(folder_path)
+        os.makedirs(folder_path)
+
     # hàm chia dataset theo tỉ lệ train và tỉ lệ valid
     def split_dataset(self, dataset_path, train_ratio, valid_ratio):
         """Chia dataset thành train, valid, test dựa trên tỷ lệ cung cấp."""
@@ -800,9 +806,20 @@ class VideoPlayerApp:
             raise ValueError("Không tìm thấy bất kỳ cặp ảnh-nhãn hợp lệ nào trong dataset.")
 
         # Sao chép dữ liệu vào `temp_backup`
+        # Làm sạch danh sách cặp và thay bằng đường dẫn từ temp
+        updated_pairs = []
         for image_path, label_path in all_pairs:
-            shutil.copy(image_path, os.path.join(temp_images_path, os.path.basename(image_path)))
-            shutil.copy(label_path, os.path.join(temp_labels_path, os.path.basename(label_path)))
+            image_name = os.path.basename(image_path)
+            label_name = os.path.basename(label_path)
+            # Đường dẫn mới đến temp
+            new_image_path = os.path.join(temp_images_path, image_name)
+            new_label_path = os.path.join(temp_labels_path, label_name)
+            # Sao chép đến đường dẫn mới
+            shutil.copy(image_path, new_image_path)
+            shutil.copy(label_path, new_label_path)
+            # Update lại danh sách thành đường dẫn mới
+            updated_pairs.append((new_image_path, new_label_path))
+        all_pairs = updated_pairs  # Cập nhật lại cặp mới dùng đường dẫn chuẩn
 
         # Trộn và chia dataset
         random.shuffle(all_pairs)
@@ -822,13 +839,33 @@ class VideoPlayerApp:
         print(f"Số mẫu Valid: {valid_count}")
         print(f"Số mẫu Test: {test_count}")
 
-        # Sao chép cặp ảnh vào thư mục đích
+        # Xóa dữ liệu cũ trước khi ghi mới
+        self.clear_folder(train_images_path)
+        self.clear_folder(train_labels_path)
+        self.clear_folder(valid_images_path)
+        self.clear_folder(valid_labels_path)
+        self.clear_folder(test_images_path)
+        self.clear_folder(test_labels_path)
+
+        # # Sao chép cặp ảnh vào thư mục đích
+        # def copy_files(pair_list, dest_images_path, dest_labels_path):
+        #     for image_path, label_path in pair_list:
+        #         os.makedirs(dest_images_path, exist_ok=True)
+        #         os.makedirs(dest_labels_path, exist_ok=True)
+        #         shutil.copy(image_path, os.path.join(dest_images_path, os.path.basename(image_path)))
+        #         shutil.copy(label_path, os.path.join(dest_labels_path, os.path.basename(label_path)))
+
+        # Sao chép cặp ảnh vào thư mục đích (chuẩn hóa đường dẫn)
         def copy_files(pair_list, dest_images_path, dest_labels_path):
+            dest_images_path = Path(dest_images_path)
+            dest_labels_path = Path(dest_labels_path)
+            dest_images_path.mkdir(parents=True, exist_ok=True)
+            dest_labels_path.mkdir(parents=True, exist_ok=True)
             for image_path, label_path in pair_list:
-                os.makedirs(dest_images_path, exist_ok=True)
-                os.makedirs(dest_labels_path, exist_ok=True)
-                shutil.copy(image_path, os.path.join(dest_images_path, os.path.basename(image_path)))
-                shutil.copy(label_path, os.path.join(dest_labels_path, os.path.basename(label_path)))
+                src_image = Path(image_path)
+                src_label = Path(label_path)
+                shutil.copy(str(src_image), str(dest_images_path / src_image.name))
+                shutil.copy(str(src_label), str(dest_labels_path / src_label.name))
 
         copy_files(train_pairs, train_images_path, train_labels_path)
         copy_files(valid_pairs, valid_images_path, valid_labels_path)
@@ -2158,34 +2195,6 @@ class VideoPlayerApp:
                         if conf > 0.8:  # Lọc kết quả có độ tin cậy cao
                             ocr_text += text + " "
         return ocr_text.strip()  # Trả về chuỗi văn bản OCR đã được trích xuất
-
-
-    # def show_frame(self):
-    #     if self.video_playing() and not self.paused:
-    #         ret, frame = self.video_cap.read()
-    #         if ret:
-    #             # Tạo bản sao của frame gốc để cắt ảnh
-    #             original_frame = frame.copy()
-
-    #             # Phát hiện đối tượng và chạy OCR
-    #             detections = self.process_frame(original_frame)  # Phát hiện đối tượng trên frame gốc
-
-    #             # Cập nhật hình ảnh đã vẽ lên Canvas
-    #             processed_frame = self.draw_detections(frame, detections)  # Vẽ bounding box, nhãn, OCR
-
-    #             # Hiển thị hình ảnh lên Canvas
-    #             self.update_canvas_image(processed_frame)
-
-    #             # Hiển thị các ảnh cắt ra trong khung cuộn
-    #             self.display_detected_images(detections)
-
-    #             # Tiếp tục hiển thị frame tiếp theo sau khoảng delay
-    #             self.root.after(self.frame_delay, self.show_frame)
-    #         else:
-    #             # Xử lý khi video kết thúc
-    #             if self.replay_flag:
-    #                 self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    #                 self.show_frame()
 
     def show_frame(self):
         if self.video_playing() and not self.paused:
