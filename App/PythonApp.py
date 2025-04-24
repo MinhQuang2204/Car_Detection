@@ -208,23 +208,6 @@ def read_ground_truth_boxes(yaml_file_path):
         ground_truth_boxes[image_name] = boxes
     return ground_truth_boxes
 
-# def get_predictions_from_test_set(model, yaml_file_path):
-#     """Lấy bounding box dự đoán từ mô hình YOLO."""
-#     test_paths = get_test_paths(yaml_file_path)
-#     images_path = test_paths['images']
-
-#     predictions = {}
-#     results = model.predict(source=images_path, save=False)
-
-#     for result in results:
-#         image_name = os.path.basename(result.path)
-#         boxes = result.boxes.xyxy.cpu().numpy()
-#         confidences = result.boxes.conf.cpu().numpy()
-
-#         predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
-
-#     return predictions
-
 def get_predictions_from_test_set(model, yaml_file_path):
     """Lấy bounding box dự đoán từ mô hình YOLO."""
     test_paths = get_test_paths(yaml_file_path)
@@ -396,7 +379,7 @@ class VideoPlayerApp:
             self.knn_model = joblib.load("../KNN_Models/knn_multi_output_biensoxe.pkl")
             self.knn_label_encoders = joblib.load("../KNN_Models/label_encoders_knn.pkl")
         except Exception as e:
-            print("⚠️ Không thể load mô hình KNN hoặc label encoders:", e)
+            print(" Không thể load mô hình KNN hoặc label encoders:", e)
 
         self.train_process = None  # Tiến trình huấn luyện
         self.test_process = None    # Tiến trình kiểm tra (test)
@@ -1375,127 +1358,6 @@ class VideoPlayerApp:
         return {'images': images_path, 'labels': labels_path}
 
     ##############################
-    # def read_ground_truth_boxes(self, yaml_file_path):
-    #     """Đọc các bounding box từ nhãn ground truth."""
-    #     test_paths = self.get_test_paths(yaml_file_path)
-    #     labels_path = test_paths['labels']
-    #     images_path = test_paths['images']
-
-    #     ground_truth_boxes = {}
-    #     for label_file in os.listdir(labels_path):
-    #         if not label_file.endswith('.txt'):
-    #             continue
-
-    #         image_name = label_file.replace('.txt', '.jpg')
-    #         image_path = os.path.join(images_path, image_name)
-
-    #         if not os.path.exists(image_path):
-    #             print(f"Image {image_name} not found, skipping.")
-    #             continue
-
-    #         with Image.open(image_path) as img:
-    #             image_width, image_height = img.size
-
-    #         boxes = []
-    #         with open(os.path.join(labels_path, label_file), 'r') as f:
-    #             for line in f:
-    #                 parts = line.strip().split()
-    #                 _, x_center, y_center, width, height = map(float, parts)
-
-    #                 # Chuyển đổi từ định dạng YOLO sang [x1, y1, x2, y2]
-    #                 x1 = (x_center - width / 2) * image_width
-    #                 y1 = (y_center - height / 2) * image_height
-    #                 x2 = (x_center + width / 2) * image_width
-    #                 y2 = (y_center + height / 2) * image_height
-
-    #                 boxes.append([x1, y1, x2, y2])
-
-    #         ground_truth_boxes[image_name] = boxes
-
-    #     return ground_truth_boxes
-    
-    # def get_predictions_from_test_set(self, yaml_file_path):
-    #     """Lấy bounding box dự đoán từ mô hình YOLO."""
-    #     test_paths = self.get_test_paths(yaml_file_path)
-    #     images_path = test_paths['images']
-
-    #     predictions = {}
-    #     results = self.custom_model.predict(source=images_path, save=False)
-
-    #     for result in results:
-    #         image_name = os.path.basename(result.path)
-    #         boxes = result.boxes.xyxy.cpu().numpy()
-    #         confidences = result.boxes.conf.cpu().numpy()
-
-    #         predictions[image_name] = {'boxes': boxes, 'confidences': confidences}
-
-    #     return predictions
-    
-    # def calculate_miou(self, predictions, ground_truth_boxes):
-    #     """Tính toán mIoU giữa các dự đoán và ground truth boxes."""
-    #     ious = []
-    #     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    #     for image_name, gt_boxes in ground_truth_boxes.items():
-    #         pred_boxes = predictions.get(image_name, {}).get('boxes', [])
-    #         if len(pred_boxes) == 0 or len(gt_boxes) == 0:
-    #             continue  # Bỏ qua nếu không có bounding boxes hợp lệ
-    #         # Chuyển đổi sang tensor và đảm bảo định dạng (N, 4)
-    #         pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
-    #         gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32).reshape(-1, 4).to(device)
-    #         if pred_boxes.shape[1] != 4 or gt_boxes.shape[1] != 4:
-    #             continue  # Bỏ qua nếu định dạng không đúng (N, 4)
-    #         # Tính toán IoU
-    #         iou_matrix = box_iou(pred_boxes, gt_boxes)
-    #         # Lấy giá trị IoU lớn nhất cho mỗi box dự đoán
-    #         max_ious = iou_matrix.max(dim=1).values.cpu().numpy()
-    #         ious.extend(max_ious)
-
-    #     # Tính giá trị trung bình mIoU
-    #     return np.mean(ious) if ious else 0
-
-    # def calculate_plate_detection_accuracy(self, predictions, ground_truth_boxes, iou_threshold=0.5):
-    #     """
-    #     Tính tỷ lệ nhận diện biển số dựa trên các khung dự đoán và nhãn ground truth.
-    #     """
-    #     try:
-    #         correct_detections = 0
-    #         total_plates = sum(len(boxes) for boxes in ground_truth_boxes.values())
-
-    #         for image_name, gt_boxes in ground_truth_boxes.items():
-    #             pred_boxes = predictions.get(image_name, {}).get('boxes', []) 
-
-    #             # Chuyển sang tensor
-    #             pred_boxes = torch.tensor(pred_boxes, dtype=torch.float32)
-    #             gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32)
-
-    #             # Bỏ qua ảnh nếu không có dự đoán hoặc ground truth
-    #             if len(pred_boxes) == 0 or len(gt_boxes) == 0:
-    #                 continue
-
-    #             # Tính IoU
-    #             iou_matrix = box_iou(pred_boxes, gt_boxes)
-    #             max_ious = iou_matrix.max(dim=0).values  # Lấy giá trị IoU lớn nhất cho mỗi nhãn thực tế
-
-    #             # Tính số lượng dự đoán đúng
-    #             correct_detections += (max_ious >= iou_threshold).sum().item()
-
-    #         # Tính tỷ lệ nhận diện
-    #         accuracy = (correct_detections / total_plates) * 100 if total_plates > 0 else 0
-    #         return accuracy
-        
-    #     except Exception as e:
-    #         print(f"Lỗi khi tính tỷ lệ nhận diện biển số: {e}")
-    #         return 0
-
-    # def calculate_average_confidence(self, predictions):
-    #     """
-    #     Tính độ tin cậy trung bình từ các bounding box dự đoán.
-    #     """
-    #     confidences = []
-    #     for data in predictions.values():
-    #         confidences.extend(data.get('confidences', []))
-    #     return np.mean(confidences) if confidences else 0
 
     #####################
     def start_testing(self):
